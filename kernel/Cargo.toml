@@ -1,0 +1,18 @@
+[package]
+name = "pindos-kernel"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[lib]
+name = "pindos_kernel"
+crate-type = ["staticlib"]
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
