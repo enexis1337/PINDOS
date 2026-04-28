@@ -580,27 +580,44 @@ pub fn clear(color: u32) {
 
 // ── Шрифт 8x16 (встроенный) ───────────────────────────────────────────────
 
-// Минимальный bitmap шрифт — ASCII 32-127, 8x16 пикселей
-// Каждый символ = 16 байт (1 байт = 1 строка, бит = пиксель)
-static FONT_8X16: &[u8] = include_bytes!("font8x16.bin");
+// Оригинальный шрифт — оставлен для совместимости
+static FONT_8X16_OLD: &[u8] = include_bytes!("font8x16.bin");
+// Новый шрифт — более чистые глифы
+static FONT_8X16_NEW: &[u8] = include_bytes!("font8x16_new.bin");
 
 pub const FONT_W: u32 = 8;
 pub const FONT_H: u32 = 16;
 
+// Активный шрифт: false = старый, true = новый
+static mut USE_NEW_FONT: bool = false;
+
+pub fn set_font_new(enable: bool) {
+    unsafe { USE_NEW_FONT = enable; }
+}
+
+pub fn is_new_font() -> bool {
+    unsafe { USE_NEW_FONT }
+}
+
+#[inline]
+fn active_font() -> &'static [u8] {
+    if unsafe { USE_NEW_FONT } { FONT_8X16_NEW } else { FONT_8X16_OLD }
+}
+
 pub fn draw_char(x: u32, y: u32, c: u8, fg: u32, bg: u32) {
     let ch = if c >= 32 && c < 128 { c - 32 } else { 0 };
+    let font = active_font();
     let glyph_off = ch as usize * FONT_H as usize;
 
-    if glyph_off + FONT_H as usize > FONT_8X16.len() { return; }
+    if glyph_off + FONT_H as usize > font.len() { return; }
 
     for row in 0..FONT_H {
-        let byte = FONT_8X16[glyph_off + row as usize];
+        let byte = font[glyph_off + row as usize];
         for col in 0..FONT_W {
             let pixel = (byte >> (7 - col)) & 1;
             if pixel != 0 {
                 put_pixel(x + col, y + row, fg);
             } else if bg != 0xFF000000 {
-                // 0xFF000000 = маркер "прозрачный фон"
                 put_pixel(x + col, y + row, bg);
             }
         }

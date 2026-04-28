@@ -426,11 +426,6 @@ impl MellRuntime {
             btn_x += label.len() + 4;
         }
 
-        let status = core::str::from_utf8(&self.status[..self.status_len]).unwrap_or("");
-        if btn_x < cols.saturating_sub(18) {
-            put_str_at_bg(btn_x, row, status, BLACK, MELL_TASKBAR);
-        }
-
         let dt = crate::drivers::rtc::read();
         let mut tbuf = [0u8; 5];
         crate::drivers::rtc::format_time_short(&dt, &mut tbuf);
