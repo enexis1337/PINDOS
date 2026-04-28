@@ -468,9 +468,15 @@ fn cmd_find(args: &str) {
 
 fn cmd_uname(args: &str) {
     if args.contains('a') || args == "-a" {
-        vga::print("PINDOS pindos 0.1 #1 i686 PINDOS\n");
+        vga::print(crate::version::OS_NAME);
+        vga::print(" pindos ");
+        vga::print(crate::version::OS_VERSION);
+        vga::print(" #1 i686 ");
+        vga::print(crate::version::OS_NAME);
+        vga::put_char(b'\n');
     } else {
-        vga::print("PINDOS\n");
+        vga::print(crate::version::OS_NAME);
+        vga::put_char(b'\n');
     }
 }
 

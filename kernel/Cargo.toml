@@ -1,11 +1,11 @@
 [package]
-name = "pindos-kernel"
-version = "0.1.0"
+name = "hammam"
+version = "0.2.0"
 edition = "2021"
 autobins = false
 
 [lib]
-name = "pindos_kernel"
+name = "hammam"
 crate-type = ["staticlib"]
 path = "src/main.rs"
 

@@ -14,7 +14,7 @@ use apps::{
 use vga_gui::*;
 
 const TASKBAR_ROWS: usize = 2;
-const START_BTN_W: usize = 8;
+const START_BTN_W: usize = 6;
 const START_MENU_W: usize = 28;
 const START_MENU_H: usize = 16;
 const APP_WINDOW_COUNT: usize = 5;
@@ -22,6 +22,13 @@ const MIN_WINDOW_W: usize = 34;
 const MIN_WINDOW_H: usize = 12;
 const BURMALDA_MIN_W: usize = 82;
 const BURMALDA_MIN_H: usize = 28;
+
+// Сетка иконок: ячейка 12x6 символов (ширина x высота)
+const ICON_GRID_W: usize = 12;
+const ICON_GRID_H: usize = 6;
+// Иконка занимает 10x4 символов внутри ячейки
+const ICON_W: usize = 10;
+const ICON_H: usize = 4;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum AppKind {
@@ -64,23 +71,40 @@ enum PointerGrab {
         start_w: usize,
         start_h: usize,
     },
+    DragIcons {
+        // Перетаскиваем все выделенные иконки
+        // grab_dx/dy — смещение от левого верхнего угла первой иконки
+        grab_dx: i32,
+        grab_dy: i32,
+        start_mouse_px: usize,
+        start_mouse_py: usize,
+        // Начальные позиции всех иконок (в ячейках сетки)
+        start_grid: [(usize, usize); DESKTOP_ICONS_COUNT],
+    },
+    RubberBand {
+        start_x: usize,
+        start_y: usize,
+    },
 }
 
 struct DesktopIcon {
     label: &'static str,
     action: Action,
-    x: usize,
-    y: usize,
+    // Начальная ячейка сетки (col, row)
+    grid_col: usize,
+    grid_row: usize,
     file_icon: bool,
 }
 
+const DESKTOP_ICONS_COUNT: usize = 6;
+
 const DESKTOP_ICONS: &[DesktopIcon] = &[
-    DesktopIcon { label: "Mocha",        action: Action::OpenApp(AppKind::Mocha),    x: 3, y: 4,  file_icon: false },
-    DesktopIcon { label: "Qinn",         action: Action::OpenApp(AppKind::Qinn),     x: 3, y: 9,  file_icon: false },
-    DesktopIcon { label: "Burmalda",     action: Action::OpenApp(AppKind::Burmalda), x: 3, y: 14, file_icon: true  },
-    DesktopIcon { label: "Settings",     action: Action::OpenApp(AppKind::Settings), x: 3, y: 19, file_icon: false },
-    DesktopIcon { label: "Viewer",       action: Action::OpenApp(AppKind::Viewer),   x: 3, y: 24, file_icon: true  },
-    DesktopIcon { label: "Recycle Bin",  action: Action::OpenAbout,                  x: 3, y: 29, file_icon: false },
+    DesktopIcon { label: "Mocha",       action: Action::OpenApp(AppKind::Mocha),    grid_col: 0, grid_row: 0, file_icon: false },
+    DesktopIcon { label: "Qinn",        action: Action::OpenApp(AppKind::Qinn),     grid_col: 0, grid_row: 1, file_icon: false },
+    DesktopIcon { label: "Burmalda",    action: Action::OpenApp(AppKind::Burmalda), grid_col: 0, grid_row: 2, file_icon: true  },
+    DesktopIcon { label: "Settings",    action: Action::OpenApp(AppKind::Settings), grid_col: 0, grid_row: 3, file_icon: false },
+    DesktopIcon { label: "Viewer",      action: Action::OpenApp(AppKind::Viewer),   grid_col: 0, grid_row: 4, file_icon: true  },
+    DesktopIcon { label: "Recycle Bin", action: Action::OpenAbout,                  grid_col: 0, grid_row: 5, file_icon: false },
 ];
 
 struct StartEntry {
@@ -96,9 +120,17 @@ const START_MENU: &[StartEntry] = &[
     StartEntry { label: "Settings",     action: Action::OpenApp(AppKind::Settings) },
     StartEntry { label: "Viewer",       action: Action::OpenApp(AppKind::Viewer) },
     StartEntry { label: "Run...",       action: Action::OpenRun },
-    StartEntry { label: "About Mell95", action: Action::OpenAbout },
+    StartEntry { label: "About Mell",  action: Action::OpenAbout },
     StartEntry { label: "Close Window", action: Action::CloseFocused },
 ];
+
+// Контекстное меню иконки
+const ICON_CTX_MENU: &[&str] = &["Open", "Rename", "Delete"];
+// Контекстное меню рабочего стола
+const DESK_CTX_MENU: &[&str] = &["Arrange Icons", "Refresh", "About Mell"];
+
+const CTX_MENU_W: usize = 18;
+const CTX_MENU_ITEM_H: usize = 1;
 
 struct AppWindow {
     app: AppKind,
@@ -131,6 +163,13 @@ impl AppWindow {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum CtxMenuKind {
+    None,
+    Icon(usize),  // индекс иконки
+    Desktop,
+}
+
 pub struct MellRuntime {
     mocha: MochaApp,
     qinn: QinnApp,
@@ -141,7 +180,8 @@ pub struct MellRuntime {
     focused: Option<usize>,
     next_z: u16,
     pointer_grab: PointerGrab,
-    selected_icon: usize,
+    // Выделение иконок
+    selected_icons: [bool; DESKTOP_ICONS_COUNT],
     selected_start: usize,
     start_open: bool,
     run_open: bool,
@@ -152,10 +192,25 @@ pub struct MellRuntime {
     status: [u8; 80],
     status_len: usize,
     last_left_down: bool,
+    last_right_down: bool,
+    // Позиции иконок в ячейках сетки (col, row)
+    icon_grid: [(usize, usize); DESKTOP_ICONS_COUNT],
+    // Контекстное меню
+    ctx_menu: CtxMenuKind,
+    ctx_menu_x: usize,
+    ctx_menu_y: usize,
+    ctx_selected: usize,
+    // Rubber band выделение (пиксели)
+    rubber_x1: usize,
+    rubber_y1: usize,
+    rubber_x2: usize,
+    rubber_y2: usize,
+    rubber_active: bool,
 }
 
 impl MellRuntime {
     pub fn new() -> Self {
+        let icon_grid = core::array::from_fn(|i| (DESKTOP_ICONS[i].grid_col, DESKTOP_ICONS[i].grid_row));
         let mut rt = MellRuntime {
             mocha: MochaApp::new(),
             qinn: QinnApp::new(),
@@ -166,7 +221,7 @@ impl MellRuntime {
             focused: None,
             next_z: 1,
             pointer_grab: PointerGrab::None,
-            selected_icon: 0,
+            selected_icons: [false; DESKTOP_ICONS_COUNT],
             selected_start: 0,
             start_open: false,
             run_open: false,
@@ -177,13 +232,24 @@ impl MellRuntime {
             status: [0; 80],
             status_len: 0,
             last_left_down: false,
+            last_right_down: false,
+            icon_grid,
+            ctx_menu: CtxMenuKind::None,
+            ctx_menu_x: 0,
+            ctx_menu_y: 0,
+            ctx_selected: 0,
+            rubber_x1: 0,
+            rubber_y1: 0,
+            rubber_x2: 0,
+            rubber_y2: 0,
+            rubber_active: false,
         };
-        rt.set_status("Desktop ready");
+        rt.set_status("");
         rt
     }
 
     pub fn run(&mut self) -> ! {
-        crate::vga::serial_print("mell95: runtime start\n");
+        crate::vga::serial_print("mell: runtime start\n");
         crate::drivers::vesa::enable_backbuffer();
         self.redraw();
         loop {
@@ -203,6 +269,9 @@ impl MellRuntime {
     fn redraw(&self) {
         self.draw_background();
         self.draw_desktop_icons();
+        if self.rubber_active {
+            self.draw_rubber_band();
+        }
         self.draw_windows();
         self.draw_taskbar();
         if self.start_open {
@@ -217,6 +286,9 @@ impl MellRuntime {
         if self.help_open {
             self.draw_help_dialog();
         }
+        if self.ctx_menu != CtxMenuKind::None {
+            self.draw_ctx_menu();
+        }
         draw_cursor_at_current();
         crate::drivers::vesa::present();
     }
@@ -226,15 +298,77 @@ impl MellRuntime {
     }
 
     fn draw_desktop_icons(&self) {
-        let desktop_selected = self.focused.is_none() && !self.start_open && !self.run_open
-            && !self.about_open && !self.help_open;
+        let is_dragging_any = matches!(self.pointer_grab, PointerGrab::DragIcons { .. });
         for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
-            let selected = desktop_selected && i == self.selected_icon;
+            let selected = self.selected_icons[i];
+            let (gc, gr) = self.icon_grid[i];
+            let ix = 1 + gc * ICON_GRID_W;
+            let iy = 1 + gr * ICON_GRID_H;
+            // Во время drag выделенные иконки рисуем полупрозрачно (без выделения)
+            let draw_selected = selected && !is_dragging_any;
             if icon.file_icon {
-                draw_file_icon(icon.x, icon.y, icon.label, selected);
+                draw_file_icon(ix, iy, icon.label, draw_selected);
             } else {
-                draw_folder_icon(icon.x, icon.y, icon.label, selected);
+                draw_folder_icon(ix, iy, icon.label, draw_selected);
             }
+            // Если иконка перетаскивается — рисуем ghost на новой позиции
+            if is_dragging_any && selected {
+                if let PointerGrab::DragIcons { ref start_grid, grab_dx, grab_dy, .. } = self.pointer_grab {
+                    let (sc, sr) = start_grid[i];
+                    let (gc2, gr2) = self.icon_grid[i];
+                    // Если позиция изменилась — рисуем ghost
+                    if gc2 != sc || gr2 != sr {
+                        let gx = 1 + gc2 * ICON_GRID_W;
+                        let gy = 1 + gr2 * ICON_GRID_H;
+                        if icon.file_icon {
+                            draw_file_icon(gx, gy, icon.label, true);
+                        } else {
+                            draw_folder_icon(gx, gy, icon.label, true);
+                        }
+                    }
+                    let _ = (grab_dx, grab_dy);
+                }
+            }
+        }
+    }
+
+    fn draw_rubber_band(&self) {
+        let x1 = self.rubber_x1.min(self.rubber_x2);
+        let y1 = self.rubber_y1.min(self.rubber_y2);
+        let x2 = self.rubber_x1.max(self.rubber_x2);
+        let y2 = self.rubber_y1.max(self.rubber_y2);
+        if x2 <= x1 || y2 <= y1 { return; }
+        let w = (x2 - x1) as u32;
+        let h = (y2 - y1) as u32;
+        // Рамка выделения — синяя пунктирная
+        crate::drivers::vesa::draw_rect_outline(x1 as u32, y1 as u32, w, h, 0x0000FF);
+        // Полупрозрачная заливка (просто светло-синяя рамка внутри)
+        if w > 2 && h > 2 {
+            crate::drivers::vesa::draw_rect_outline(x1 as u32 + 1, y1 as u32 + 1, w - 2, h - 2, 0x4444AA);
+        }
+    }
+
+    fn draw_ctx_menu(&self) {
+        let items: &[&str] = match self.ctx_menu {
+            CtxMenuKind::Icon(_) => ICON_CTX_MENU,
+            CtxMenuKind::Desktop => DESK_CTX_MENU,
+            CtxMenuKind::None => return,
+        };
+        let h = items.len() + 2;
+        let x = self.ctx_menu_x;
+        let y = self.ctx_menu_y;
+        // Тень
+        fill_rect(x + 1, y + 1, CTX_MENU_W, h, b' ', 0x202020);
+        // Фон
+        fill_rect(x, y, CTX_MENU_W, h, b' ', MELL_WINDOW);
+        draw_outer_panel(x, y, CTX_MENU_W, h, true);
+        for (i, item) in items.iter().enumerate() {
+            let row = y + 1 + i;
+            let sel = i == self.ctx_selected;
+            let bg = if sel { MELL_TITLEBAR_ACTIVE } else { MELL_WINDOW };
+            let fg = if sel { WHITE } else { BLACK };
+            fill_rect(x + 1, row, CTX_MENU_W - 2, 1, b' ', bg);
+            put_str_at_bg(x + 2, row, item, fg, bg);
         }
     }
 
@@ -278,7 +412,7 @@ impl MellRuntime {
 
         fill_rect(0, row, cols, TASKBAR_ROWS, b' ', MELL_TASKBAR);
         fill_rect(0, row, cols, 1, b' ', WHITE);
-        draw_button(0, row, "Start", self.start_open);
+        draw_button(0, row, "Mell", self.start_open);
 
         let mut btn_x = START_BTN_W + 1;
         for idx in 0..APP_WINDOW_COUNT {
@@ -328,7 +462,7 @@ impl MellRuntime {
     }
 
     fn draw_run_dialog(&self) {
-        let win = Window::new(center_x(44), center_y(9), 44, 9, "Run");
+        let win = Window::new(center_x(44), center_y(9), 44, 9, "Run...");
         win.draw();
         let ix = win.inner_x();
         let iy = win.inner_y();
@@ -345,14 +479,15 @@ impl MellRuntime {
     }
 
     fn draw_about_dialog(&self) {
-        let win = Window::new(center_x(48), center_y(12), 48, 12, "About Mell95");
+        let win = Window::new(center_x(48), center_y(12), 48, 12, "About Mell");
         win.draw();
         let ix = win.inner_x();
         let iy = win.inner_y();
         fill_rect(ix, iy, win.inner_w(), win.inner_h(), b' ', MELL_WINDOW);
-        put_str_at(ix + 2, iy + 1, "Mell95 Desktop", MELL_TITLEBAR_ACTIVE);
+        put_str_at(ix + 2, iy + 1, crate::version::DESKTOP_FULL, MELL_TITLEBAR_ACTIVE);
+        put_str_at(ix + 2, iy + 2, crate::version::OS_FULL, BLACK);
         put_str_at(ix + 2, iy + 3, "Classic shell inspired by Windows 95.", BLACK);
-        put_str_at(ix + 2, iy + 4, "Built on PINDOS framebuffer GUI.", BLACK);
+        put_str_at(ix + 2, iy + 4, crate::version::KERNEL_FULL, DGRAY);
         put_str_at(ix + 2, iy + 6, "Apps available:", BLACK);
         put_str_at(ix + 4, iy + 7, "Mocha, Qinn, Burmalda,", BLACK);
         put_str_at(ix + 4, iy + 8, "Settings, Viewer, Run...", BLACK);
@@ -384,6 +519,12 @@ impl MellRuntime {
     }
 
     fn handle_key(&mut self, key: Key) {
+        // Контекстное меню перехватывает все клавиши
+        if self.ctx_menu != CtxMenuKind::None {
+            self.handle_ctx_menu_key(key);
+            return;
+        }
+
         if self.about_open || self.help_open {
             if matches!(key, Key::Esc | Key::Enter) {
                 self.about_open = false;
@@ -412,6 +553,31 @@ impl MellRuntime {
             self.handle_app_key(idx, key);
         } else {
             self.handle_desktop_key(key);
+        }
+    }
+
+    fn handle_ctx_menu_key(&mut self, key: Key) {
+        let items_len = match self.ctx_menu {
+            CtxMenuKind::Icon(_) => ICON_CTX_MENU.len(),
+            CtxMenuKind::Desktop => DESK_CTX_MENU.len(),
+            CtxMenuKind::None => { self.ctx_menu = CtxMenuKind::None; return; }
+        };
+        match key {
+            Key::Esc => { self.ctx_menu = CtxMenuKind::None; }
+            Key::Up => {
+                if self.ctx_selected == 0 { self.ctx_selected = items_len - 1; }
+                else { self.ctx_selected -= 1; }
+            }
+            Key::Down => {
+                self.ctx_selected = (self.ctx_selected + 1) % items_len;
+            }
+            Key::Enter => {
+                let menu = self.ctx_menu;
+                let sel = self.ctx_selected;
+                self.ctx_menu = CtxMenuKind::None;
+                self.execute_ctx_action(menu, sel);
+            }
+            _ => {}
         }
     }
 
@@ -452,7 +618,7 @@ impl MellRuntime {
             "about" => {
                 self.about_open = true;
                 self.help_open = false;
-                self.set_status("About Mell95");
+                self.set_status("About Mell");
             }
             "help" | "programs" => {
                 self.help_open = true;
@@ -489,18 +655,27 @@ impl MellRuntime {
     fn handle_desktop_key(&mut self, key: Key) {
         match key {
             Key::Left | Key::Up => {
-                if self.selected_icon == 0 {
-                    self.selected_icon = DESKTOP_ICONS.len().saturating_sub(1);
-                } else {
-                    self.selected_icon -= 1;
-                }
+                // Перемещаем фокус на предыдущую иконку
+                let cur = self.first_selected().unwrap_or(0);
+                let prev = if cur == 0 { DESKTOP_ICONS_COUNT - 1 } else { cur - 1 };
+                self.selected_icons = [false; DESKTOP_ICONS_COUNT];
+                self.selected_icons[prev] = true;
             }
             Key::Right | Key::Down | Key::Tab => {
-                self.selected_icon = (self.selected_icon + 1) % DESKTOP_ICONS.len();
+                let cur = self.first_selected().unwrap_or(DESKTOP_ICONS_COUNT - 1);
+                let next = (cur + 1) % DESKTOP_ICONS_COUNT;
+                self.selected_icons = [false; DESKTOP_ICONS_COUNT];
+                self.selected_icons[next] = true;
             }
             Key::Enter => {
-                let action = DESKTOP_ICONS[self.selected_icon].action;
-                self.execute_action(action);
+                if let Some(i) = self.first_selected() {
+                    let action = DESKTOP_ICONS[i].action;
+                    self.execute_action(action);
+                }
+            }
+            // Ctrl+A — выделить все
+            Key::Char(0x01) => {
+                self.selected_icons = [true; DESKTOP_ICONS_COUNT];
             }
             Key::Char(b's') | Key::Char(b'S') => {
                 self.start_open = true;
@@ -513,6 +688,10 @@ impl MellRuntime {
             Key::Char(b'5') => self.open_app(AppKind::Viewer),
             _ => {}
         }
+    }
+
+    fn first_selected(&self) -> Option<usize> {
+        self.selected_icons.iter().position(|&s| s)
     }
 
     fn handle_app_key(&mut self, idx: usize, key: Key) {
@@ -530,11 +709,15 @@ impl MellRuntime {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
-        let left_down = mouse.buttons & 0x01 != 0;
-        let pressed = left_down && !self.last_left_down;
-        let released = !left_down && self.last_left_down;
-        self.last_left_down = left_down;
+        let left_down  = mouse.buttons & 0x01 != 0;
+        let right_down = mouse.buttons & 0x02 != 0;
+        let left_pressed   = left_down  && !self.last_left_down;
+        let left_released  = !left_down && self.last_left_down;
+        let right_pressed  = right_down && !self.last_right_down;
+        self.last_left_down  = left_down;
+        self.last_right_down = right_down;
 
+        // ── Обновление активного grab ──────────────────────────────────────
         if left_down {
             match self.pointer_grab {
                 PointerGrab::Drag { idx, grab_dx, grab_dy } => {
@@ -545,18 +728,83 @@ impl MellRuntime {
                     self.update_resize(idx, mouse.px, mouse.py, start_px, start_py, start_w, start_h);
                     return;
                 }
+                PointerGrab::DragIcons { grab_dx, grab_dy, .. } => {
+                    self.update_icons_drag(mouse.px, mouse.py, grab_dx, grab_dy);
+                    return;
+                }
+                PointerGrab::RubberBand { .. } => {
+                    self.rubber_x2 = mouse.px;
+                    self.rubber_y2 = mouse.py;
+                    self.update_rubber_selection();
+                    return;
+                }
                 PointerGrab::None => {}
             }
         }
 
-        if released {
+        // ── Отпускание ────────────────────────────────────────────────────
+        if left_released {
+            match self.pointer_grab {
+                PointerGrab::DragIcons { start_mouse_px, start_mouse_py, .. } => {
+                    let moved = (mouse.px as i32 - start_mouse_px as i32).abs() > 6
+                        || (mouse.py as i32 - start_mouse_py as i32).abs() > 6;
+                    if !moved {
+                        // Клик — открываем первую выделенную иконку
+                        if let Some(i) = self.first_selected() {
+                            self.execute_action(DESKTOP_ICONS[i].action);
+                        }
+                    } else {
+                        // Snap to grid: убираем коллизии
+                        self.resolve_icon_collisions();
+                        self.set_status("Icon moved");
+                    }
+                }
+                PointerGrab::RubberBand { .. } => {
+                    self.rubber_active = false;
+                    self.pointer_grab = PointerGrab::None;
+                    return;
+                }
+                _ => {}
+            }
             self.pointer_grab = PointerGrab::None;
         }
 
-        if !pressed {
+        // ── ПКМ — контекстное меню ────────────────────────────────────────
+        if right_pressed {
+            self.ctx_menu = CtxMenuKind::None;
+            // Закрываем другие оверлеи
+            self.start_open = false;
+            // Проверяем попадание в иконку
+            if let Some(icon) = self.icon_hit_test_px(mouse.px, mouse.py) {
+                // Если иконка не выделена — выделяем только её
+                if !self.selected_icons[icon] {
+                    self.selected_icons = [false; DESKTOP_ICONS_COUNT];
+                    self.selected_icons[icon] = true;
+                }
+                self.open_ctx_menu(CtxMenuKind::Icon(icon), mouse.x, mouse.y);
+            } else if self.topmost_window_at(mouse.px, mouse.py).is_none() {
+                self.open_ctx_menu(CtxMenuKind::Desktop, mouse.x, mouse.y);
+            }
             return;
         }
 
+        if !left_pressed {
+            return;
+        }
+
+        // ── Закрываем контекстное меню при клике вне него ─────────────────
+        if self.ctx_menu != CtxMenuKind::None {
+            if let Some(item) = self.ctx_menu_hit_test(mouse.x, mouse.y) {
+                let menu = self.ctx_menu;
+                self.ctx_menu = CtxMenuKind::None;
+                self.execute_ctx_action(menu, item);
+            } else {
+                self.ctx_menu = CtxMenuKind::None;
+            }
+            return;
+        }
+
+        // ── Таскбар ───────────────────────────────────────────────────────
         let taskbar_row = screen_rows().saturating_sub(TASKBAR_ROWS);
         if mouse.y >= taskbar_row {
             if mouse.x < START_BTN_W {
@@ -593,8 +841,11 @@ impl MellRuntime {
             self.start_open = false;
         }
 
+        // ── Окна ──────────────────────────────────────────────────────────
         if let Some(idx) = self.topmost_window_at(mouse.px, mouse.py) {
-            self.focus_window(idx);
+            self.focused = Some(idx);
+            self.sync_focus_flags();
+            self.selected_icons = [false; DESKTOP_ICONS_COUNT];
             if self.windows[idx].win.close_btn_clicked_px(mouse.px, mouse.py) {
                 self.close_window(idx);
                 return;
@@ -631,18 +882,46 @@ impl MellRuntime {
             return;
         }
 
+        // ── Рабочий стол ──────────────────────────────────────────────────
         self.focused = None;
         self.sync_focus_flags();
-        if let Some(icon) = self.icon_hit_test(mouse.x, mouse.y) {
-            self.selected_icon = icon;
-            self.execute_action(DESKTOP_ICONS[icon].action);
+
+        let ctrl = false; // TODO: отслеживать Ctrl через клавиатуру если нужно
+
+        if let Some(icon) = self.icon_hit_test_px(mouse.px, mouse.py) {
+            if ctrl {
+                // Ctrl+клик — переключаем выделение
+                self.selected_icons[icon] = !self.selected_icons[icon];
+            } else if !self.selected_icons[icon] {
+                // Клик на невыделенную — снимаем все, выделяем эту
+                self.selected_icons = [false; DESKTOP_ICONS_COUNT];
+                self.selected_icons[icon] = true;
+            }
+            // Начинаем drag всех выделенных иконок
+            let (gc, gr) = self.icon_grid[icon];
+            let start_grid = self.icon_grid;
+            self.pointer_grab = PointerGrab::DragIcons {
+                grab_dx: mouse.px as i32 - (1 + gc * ICON_GRID_W) as i32 * FONT_W as i32,
+                grab_dy: mouse.py as i32 - (1 + gr * ICON_GRID_H) as i32 * FONT_H as i32,
+                start_mouse_px: mouse.px,
+                start_mouse_py: mouse.py,
+                start_grid,
+            };
+            self.set_status("Drag icon");
         } else {
-            self.set_status("Desktop ready");
+            // Клик на пустое место — снимаем выделение, начинаем rubber band
+            self.selected_icons = [false; DESKTOP_ICONS_COUNT];
+            self.rubber_x1 = mouse.px;
+            self.rubber_y1 = mouse.py;
+            self.rubber_x2 = mouse.px;
+            self.rubber_y2 = mouse.py;
+            self.rubber_active = true;
+            self.pointer_grab = PointerGrab::RubberBand { start_x: mouse.px, start_y: mouse.py };
         }
     }
 
     fn handle_run_dialog_mouse(&mut self, mouse: MouseEvent) {
-        let run = Window::new(center_x(44), center_y(9), 44, 9, "Run");
+        let run = Window::new(center_x(44), center_y(9), 44, 9, "Run...");
         if run.close_btn_clicked_px(mouse.px, mouse.py) {
             self.run_open = false;
             self.set_status("Run canceled");
@@ -720,13 +999,178 @@ impl MellRuntime {
         clamp_window_to_desktop_for_app(win, app);
     }
 
-    fn icon_hit_test(&self, x: usize, y: usize) -> Option<usize> {
-        for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
-            if x >= icon.x && x < icon.x + 10 && y >= icon.y && y < icon.y + 4 {
+    fn update_icons_drag(&mut self, mouse_px: usize, mouse_py: usize, grab_dx: i32, grab_dy: i32) {
+        // Вычисляем целевую ячейку сетки для "якорной" иконки (первой выделенной)
+        let anchor = match self.first_selected() { Some(i) => i, None => return };
+        let new_px = (mouse_px as i32 - grab_dx).max(0) as usize;
+        let new_py = (mouse_py as i32 - grab_dy).max(0) as usize;
+        let target_gc = new_px / (ICON_GRID_W * FONT_W as usize);
+        let target_gr = new_py / (ICON_GRID_H * FONT_H as usize);
+
+        let max_cols = (screen_cols().saturating_sub(1)) / ICON_GRID_W;
+        let max_rows = (desktop_rows().saturating_sub(1)) / ICON_GRID_H;
+
+        // Смещение якорной иконки
+        let (anchor_gc, anchor_gr) = if let PointerGrab::DragIcons { ref start_grid, .. } = self.pointer_grab {
+            start_grid[anchor]
+        } else { return };
+
+        let dc = target_gc as i32 - anchor_gc as i32;
+        let dr = target_gr as i32 - anchor_gr as i32;
+
+        // Применяем смещение ко всем выделенным иконкам
+        let start_grid = if let PointerGrab::DragIcons { ref start_grid, .. } = self.pointer_grab {
+            *start_grid
+        } else { return };
+
+        for i in 0..DESKTOP_ICONS_COUNT {
+            if !self.selected_icons[i] { continue; }
+            let (sc, sr) = start_grid[i];
+            let nc = (sc as i32 + dc).max(0) as usize;
+            let nr = (sr as i32 + dr).max(0) as usize;
+            self.icon_grid[i] = (nc.min(max_cols), nr.min(max_rows));
+        }
+    }
+
+    fn resolve_icon_collisions(&mut self) {
+        // После drop: если две иконки попали в одну ячейку — откатываем перемещённые
+        let start_grid = if let PointerGrab::DragIcons { ref start_grid, .. } = self.pointer_grab {
+            *start_grid
+        } else { return };
+
+        for i in 0..DESKTOP_ICONS_COUNT {
+            if !self.selected_icons[i] { continue; }
+            let pos_i = self.icon_grid[i];
+            // Проверяем коллизию с невыделенными иконками
+            let mut collision = false;
+            for j in 0..DESKTOP_ICONS_COUNT {
+                if i == j { continue; }
+                if !self.selected_icons[j] && self.icon_grid[j] == pos_i {
+                    collision = true;
+                    break;
+                }
+            }
+            if collision {
+                self.icon_grid[i] = start_grid[i];
+            }
+        }
+        // Проверяем коллизии между самими перемещёнными иконками
+        for i in 0..DESKTOP_ICONS_COUNT {
+            if !self.selected_icons[i] { continue; }
+            for j in (i + 1)..DESKTOP_ICONS_COUNT {
+                if !self.selected_icons[j] { continue; }
+                if self.icon_grid[i] == self.icon_grid[j] {
+                    self.icon_grid[j] = start_grid[j];
+                }
+            }
+        }
+    }
+
+    fn update_rubber_selection(&mut self) {
+        let x1 = self.rubber_x1.min(self.rubber_x2);
+        let y1 = self.rubber_y1.min(self.rubber_y2);
+        let x2 = self.rubber_x1.max(self.rubber_x2);
+        let y2 = self.rubber_y1.max(self.rubber_y2);
+        for i in 0..DESKTOP_ICONS_COUNT {
+            let (gc, gr) = self.icon_grid[i];
+            let ix = (1 + gc * ICON_GRID_W) * FONT_W as usize;
+            let iy = (1 + gr * ICON_GRID_H) * FONT_H as usize;
+            let iw = ICON_W * FONT_W as usize;
+            let ih = ICON_H * FONT_H as usize;
+            // Пересечение прямоугольников
+            self.selected_icons[i] = ix < x2 && ix + iw > x1 && iy < y2 && iy + ih > y1;
+        }
+    }
+
+    fn icon_hit_test_px(&self, px_: usize, py_: usize) -> Option<usize> {
+        for i in 0..DESKTOP_ICONS_COUNT {
+            let (gc, gr) = self.icon_grid[i];
+            let ix = (1 + gc * ICON_GRID_W) * FONT_W as usize;
+            let iy = (1 + gr * ICON_GRID_H) * FONT_H as usize;
+            let iw = ICON_W * FONT_W as usize;
+            let ih = ICON_H * FONT_H as usize;
+            if px_ >= ix && px_ < ix + iw && py_ >= iy && py_ < iy + ih {
                 return Some(i);
             }
         }
         None
+    }
+
+    fn open_ctx_menu(&mut self, kind: CtxMenuKind, x: usize, y: usize) {
+        let items_len = match kind {
+            CtxMenuKind::Icon(_) => ICON_CTX_MENU.len(),
+            CtxMenuKind::Desktop => DESK_CTX_MENU.len(),
+            CtxMenuKind::None => return,
+        };
+        let cols = screen_cols();
+        let rows = screen_rows().saturating_sub(TASKBAR_ROWS);
+        let menu_h = items_len + 2;
+        let mx = x.min(cols.saturating_sub(CTX_MENU_W));
+        let my = y.min(rows.saturating_sub(menu_h));
+        self.ctx_menu = kind;
+        self.ctx_menu_x = mx;
+        self.ctx_menu_y = my;
+        self.ctx_selected = 0;
+    }
+
+    fn ctx_menu_hit_test(&self, x: usize, y: usize) -> Option<usize> {
+        let items: &[&str] = match self.ctx_menu {
+            CtxMenuKind::Icon(_) => ICON_CTX_MENU,
+            CtxMenuKind::Desktop => DESK_CTX_MENU,
+            CtxMenuKind::None => return None,
+        };
+        let mx = self.ctx_menu_x;
+        let my = self.ctx_menu_y;
+        if x < mx || x >= mx + CTX_MENU_W { return None; }
+        for (i, _) in items.iter().enumerate() {
+            let row = my + 1 + i;
+            if y == row { return Some(i); }
+        }
+        None
+    }
+
+    fn execute_ctx_action(&mut self, menu: CtxMenuKind, item: usize) {
+        match menu {
+            CtxMenuKind::Icon(icon_idx) => {
+                match item {
+                    0 => { // Open
+                        self.execute_action(DESKTOP_ICONS[icon_idx].action);
+                    }
+                    1 => { // Rename — пока просто статус
+                        self.set_status("Rename: not implemented");
+                    }
+                    2 => { // Delete — снимаем выделение
+                        self.selected_icons[icon_idx] = false;
+                        self.set_status("Delete: not implemented");
+                    }
+                    _ => {}
+                }
+            }
+            CtxMenuKind::Desktop => {
+                match item {
+                    0 => { // Arrange Icons — расставляем по сетке
+                        self.arrange_icons();
+                        self.set_status("Icons arranged");
+                    }
+                    1 => { // Refresh
+                        self.set_status("Refreshed");
+                    }
+                    2 => { // About
+                        self.about_open = true;
+                        self.set_status("About Mell");
+                    }
+                    _ => {}
+                }
+            }
+            CtxMenuKind::None => {}
+        }
+    }
+
+    fn arrange_icons(&mut self) {
+        // Расставляем иконки по первому столбцу сетки сверху вниз
+        for i in 0..DESKTOP_ICONS_COUNT {
+            self.icon_grid[i] = (0, i);
+        }
     }
 
     fn start_hit_test(&self, x: usize, y: usize) -> Option<usize> {
@@ -784,13 +1228,13 @@ impl MellRuntime {
                 self.run_len = 0;
                 self.about_open = false;
                 self.help_open = false;
-                self.set_status("Run");
+                self.set_status("Run...");
             }
             Action::OpenAbout => {
                 self.about_open = true;
                 self.help_open = false;
                 self.run_open = false;
-                self.set_status("About Mell95");
+                self.set_status("About Mell");
             }
             Action::OpenHelp => {
                 self.help_open = true;
@@ -1032,7 +1476,7 @@ pub fn run() -> ! {
     crate::drivers::vesa::try_qemu_vga_std();
 
     let fb = crate::drivers::vesa::get();
-    crate::vga::serial_print("mell95 fb addr=");
+    crate::vga::serial_print("mell fb addr=");
     crate::vga::serial_print_hex_u32(fb.addr);
     crate::vga::serial_print(" w=");
     crate::vga::serial_print_u32(fb.width);
@@ -1045,7 +1489,7 @@ pub fn run() -> ! {
     crate::vga::serial_print("\n");
 
     if !fb.ready || !fb.active {
-        crate::vga::print_colored("mell95: VESA framebuffer not available.\n", 0x0C);
+        crate::vga::print_colored("mell: VESA framebuffer not available.\n", 0x0C);
         loop {
             unsafe { core::arch::asm!("hlt"); }
         }

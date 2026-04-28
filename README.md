@@ -1,10 +1,10 @@
-# PINDOS
+# PINDOS 0.2
 
-Простая операционная система на ассемблере (x86) и Rust.
-
+Простая операционная система для архитектуры x86 (32-bit protected mode).  
+Написана на ассемблере (NASM) и Rust (`no_std`).
 
 ```
-    ....                   ...            
+   ....                   ...
    .+@%=.               .=**%
    .+@@@@+. ..:---:. .-*=:.++
    .=@@@@@@@@+#.%--#:#*.   #:
@@ -18,7 +18,8 @@
     .**%#+-:.       .::-+#%:
  .+:..:#..             .-*. .:.
       .-+=:        .-++.
-         .:========-..                                                                        
+         .:========-..
+
 _____ _____ _   _ _____   ____   _____
 |  __ \_   _| \ | |  __ \ / __ \ / ____|
 | |__) || | |  \| | |  | | |  | | (___
@@ -29,33 +30,65 @@ _____ _____ _   _ _____   ____   _____
 
 ---
 
-## Описание
+## Версии
 
-PINDOS — учебная операционная система для архитектуры x86 (32-bit protected mode).
-Написана на ассемблере (NASM) и Rust (`no_std`).
+| Компонент | Версия |
+|-----------|--------|
+| OS        | PINDOS 0.2 |
+| Kernel    | Hammam 0.2.0 |
+| Desktop   | Mell 0.2 |
 
-### Что умеет
+---
 
-- Загрузка с диска через собственный bootloader (MBR)
+## Что умеет
+
+- Загрузка с диска через собственный MBR bootloader
 - Переход из real mode в 32-bit protected mode
-- VGA текстовый режим 80x25 с цветным выводом
-- Ввод с клавиатуры через порт 0x60
+- VGA текстовый режим 80×25 с цветным выводом
+- VESA framebuffer (1024×768, 32bpp) для графического рабочего стола
+- Ввод с клавиатуры и мыши через PS/2
 - In-memory файловая система с поддержкой директорий и путей
+- FAT файловая система (чтение с ATA/IDE дисков)
 - Система пользователей с паролями (root + обычные пользователи, SU привилегии)
-- UNIX-подобный шелл с промптом `user@pindos:/path$`
+- UNIX-подобный шелл `uglyshell (ush)`
 - Страничная адресация (x86 paging, 4KB страницы)
 - Запуск DOS `.COM` программ через Virtual 8086 Mode
-- Запуск статически слинкованных Linux ELF32 бинарников через ring 3 + int 0x80
+- Запуск статически слинкованных Linux ELF32 бинарников (ring 3 + int 0x80)
+- Планировщик задач `dealduckd`
+- Графический рабочий стол **Mell** в стиле Windows 95
 
-### Встроенные утилиты
+---
 
-| Утилита | Описание |
-|---------|----------|
-| `mocha` | Файловый менеджер (ls, copy, cut, paste, delete, rename, edit, view) |
-| `qinn`  | Текстовый редактор (qinn is not notepad) |
-| `fastfetch` | Системная информация с ASCII артом |
+## Рабочий стол Mell
 
-### Команды шелла
+Mell — графическая оболочка поверх VESA framebuffer.
+
+**Возможности:**
+- Иконки на рабочем столе с привязкой к сетке
+- Перетаскивание иконок, мультиселект (rubber band), Ctrl+A
+- Контекстные меню (ПКМ на иконке и рабочем столе)
+- Окна с заголовком, кнопками закрыть/свернуть/развернуть
+- Перемещение и изменение размера окон мышью
+- Таскбар с кнопкой **Mell** и часами
+- Меню **Mell** (аналог Start)
+
+**Приложения Mell:**
+
+| Приложение | Описание |
+|------------|----------|
+| Mocha      | Файловый менеджер |
+| Qinn       | Текстовый редактор |
+| Burmalda   | Встроенный терминал |
+| Settings   | Настройки системы (вкладки: System, Users, Display, About) |
+| Viewer     | Просмотр изображений и медиа |
+
+Запуск: команда `mell` в шелле.
+
+---
+
+## Шелл (uglyshell)
+
+### Команды
 
 ```
 Навигация:    pwd, cd, ls, ll
@@ -63,215 +96,170 @@ PINDOS — учебная операционная система для арх�
 Текст:        head, tail, wc, grep, find
 Система:      uname, whoami, uptime, free, df, ps, env
 Пользователи: users, useradd, userdel, passwd, su
-Приложения:   mocha, qinn, fastfetch, run <file.com>, exec <elf>
+Приложения:   mocha, qinn, fastfetch, mell, dealduckd
+Запуск:       run <file.com>, exec <elf>
 Редирект:     cmd > file, cmd >> file
 ```
+
+### Встроенные утилиты
+
+| Утилита      | Описание |
+|--------------|----------|
+| `mocha`      | Файловый менеджер (TUI) |
+| `qinn`       | Текстовый редактор |
+| `fastfetch`  | Системная информация с ASCII артом |
+| `mell`       | Запуск графического рабочего стола |
+| `dealduckd`  | Управление планировщиком задач |
+
+---
+
+## Первый запуск (Drun)
+
+При первом старте запускается **Drun** — мастер начальной настройки:
+
+1. Установка пароля root
+2. Создание нового пользователя (имя, пароль, SU привилегии)
+
+При каждом последующем запуске — запрос логина и пароля.  
+3 неверных попытки — возврат к экрану логина.
 
 ---
 
 ## Структура проекта
 
 ```
-zaebOS/
+pindos/
 ├── bootloader/
-│   └── boot.asm          # MBR загрузчик, real mode → protected mode
-├── kernel/
-│   ├── kernel.asm        # ASM точка входа, вызывает kernel_main()
-│   ├── Cargo.toml
+│   └── boot.asm              # MBR загрузчик, real mode → protected mode
+├── kernel/                   # Ядро Hammam
+│   ├── kernel.asm            # ASM точка входа → kernel_main()
+│   ├── Cargo.toml            # name = "hammam", version = "0.2.0"
 │   ├── .cargo/config.toml
 │   └── src/
-│       ├── main.rs       # kernel_main, panic handler
-│       ├── vga.rs        # VGA драйвер, ввод с клавиатуры
-│       ├── fs.rs         # файловая система (директории, пути)
-│       ├── shell.rs      # UNIX-подобный шелл
-│       ├── auth.rs       # пользователи, пароли, логин
+│       ├── main.rs           # kernel_main, panic handler
+│       ├── version.rs        # версии OS / Kernel / Desktop
+│       ├── vga.rs            # VGA драйвер, ввод с клавиатуры
+│       ├── fs.rs             # in-memory файловая система
+│       ├── auth.rs           # пользователи, пароли, логин, Drun
+│       ├── uglyshell.rs      # UNIX-подобный шелл
+│       ├── dealduckd.rs      # планировщик задач
+│       ├── drivers/
+│       │   ├── vesa.rs       # VESA framebuffer
+│       │   ├── ps2.rs        # клавиатура и мышь
+│       │   ├── ata.rs        # ATA/IDE диски
+│       │   ├── rtc.rs        # часы реального времени
+│       │   ├── speaker.rs    # PC speaker
+│       │   └── ...
 │       ├── dos/
-│       │   ├── loader.rs # загрузчик .COM файлов
-│       │   ├── int21.rs  # эмуляция DOS INT 21h
-│       │   └── v86.rs    # Virtual 8086 Mode
+│       │   ├── loader.rs     # загрузчик .COM файлов
+│       │   ├── int21.rs      # эмуляция DOS INT 21h
+│       │   └── v86.rs        # Virtual 8086 Mode
 │       ├── linux/
-│       │   ├── paging.rs # x86 страничная адресация
-│       │   ├── elf.rs    # загрузчик ELF32
-│       │   ├── syscall.rs# эмуляция Linux syscalls (int 0x80)
-│       │   └── process.rs# запуск процессов в ring 3
+│       │   ├── paging.rs     # x86 страничная адресация
+│       │   ├── elf.rs        # загрузчик ELF32
+│       │   ├── syscall.rs    # эмуляция Linux syscalls (int 0x80)
+│       │   └── process.rs    # запуск процессов в ring 3
+│       ├── fs_fat/           # FAT файловая система
+│       ├── mell/             # Рабочий стол Mell
+│       │   ├── mod.rs        # runtime, WM, иконки, меню
+│       │   ├── vga_gui.rs    # GUI примитивы поверх VESA
+│       │   ├── wm.rs         # оконный менеджер
+│       │   └── apps/         # приложения Mell
+│       │       ├── mocha.rs
+│       │       ├── qinn.rs
+│       │       ├── burmalda.rs
+│       │       ├── settings.rs
+│       │       └── viewer.rs
 │       └── utils/
-│           ├── mocha.rs  # файловый менеджер
-│           ├── qinn.rs   # текстовый редактор
-│           └── fastfetch.rs # системная информация
-├── i686-unknown-none.json # Rust target spec
-├── linker.ld              # скрипт линковщика
-├── build.ps1              # сборка для Windows
-├── make-iso.py            # создание ISO образа
-├── build-all.bat          # автоматическая сборка + ISO
-└── Makefile
+│           ├── mocha.rs      # файловый менеджер (TUI)
+│           ├── qinn.rs       # текстовый редактор (TUI)
+│           └── fastfetch.rs  # системная информация
+├── scripts/
+│   ├── gen_font.py           # генерация шрифта
+│   ├── make-iso.py           # создание ISO образа
+│   └── make_usb.sh           # запись на USB
+├── i686-unknown-none.json    # Rust target spec
+├── linker.ld                 # скрипт линковщика
+├── build.ps1                 # сборка (Windows)
+├── build-iso.ps1             # сборка ISO (Windows)
+├── Makefile                  # сборка (Linux)
+└── build-all.bat             # полная сборка + ISO (Windows)
 ```
 
 ---
 
-## Сборка на Windows
+## Сборка
 
-### Зависимости
+### Windows
 
-**Rust:**
+**Зависимости:**
 ```powershell
-# Установить Rust с https://rustup.rs/
+# Rust nightly
 rustup install nightly
-rustup component add rust-src llvm-tools-preview --toolchain nightly
+rustup component add rust-src --toolchain nightly
+
+# NASM: https://www.nasm.us/
+# QEMU (опционально): https://www.qemu.org/download/#windows
 ```
 
-**NASM:**
+**Сборка:**
 ```powershell
-# Скачать с https://www.nasm.us/pub/nasm/releasebuilds/
-# Добавить в PATH
+.\build.ps1          # собрать ядро + слинковать
+.\build-iso.ps1      # собрать ISO образ
+.\build-all.bat      # всё сразу
 ```
 
-**QEMU (опционально):**
+**Запуск:**
 ```powershell
-# Скачать с https://www.qemu.org/download/#windows
-```
-
-### Сборка
-
-```powershell
-# Сборка ядра
-.\build.ps1
-
-# Создание ISO образа
-python make-iso.py
-
-# Все в одной команде
-.\build-all.bat
-```
-
-### Запуск
-
-```powershell
-# Floppy образ в QEMU
-.\build.ps1 run-grub
-
-# ISO образ в QEMU  
 qemu-system-i386 -cdrom target\pindos.iso -m 64M
-
-# Запись на USB (используйте Rufus или balenaEtcher)
 ```
 
----
+### Linux
 
-## Создание ISO образа
-
-PINDOS поддерживает создание загрузочных ISO образов для записи на CD/DVD или USB.
-
-### Автоматическое создание
-
+**Зависимости (Ubuntu/Debian):**
 ```bash
-# Linux/macOS
-make iso
-
-# Windows
-python make-iso.py
-# или
-.\build-all.bat
-```
-
-### Ручное создание (с GRUB)
-
-```bash
-# Требует: grub-mkrescue, xorriso
-.\build-iso.ps1        # Windows (MSYS2)
-```
-
-### Использование ISO
-
-**Виртуальные машины:**
-- QEMU: `qemu-system-i386 -cdrom pindos.iso -m 64M`
-- VirtualBox: подключить ISO как CD-ROM
-- VMware: подключить ISO как CD-ROM
-
-**Запись на физический носитель:**
-- **CD/DVD**: ImgBurn, Nero, встроенная запись Windows
-- **USB**: Rufus, balenaEtcher, или `dd if=pindos.iso of=/dev/sdX`
-
-**Размер ISO:** ~0.4 MB (очень компактно!)
-
----
-
-## Сборка на Linux
-
-### Зависимости
-
-**Ubuntu / Debian:**
-```bash
-sudo apt update
 sudo apt install nasm binutils-multiarch qemu-system-x86 make python3 \
-                 grub-pc-bin grub-efi-amd64-bin xorriso mtools
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S nasm qemu-system-x86 make python grub xorriso mtools
-```
-
-### Rust
-
-```bash
+                 grub-pc-bin xorriso mtools
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-rustup install nightly
-rustup component add rust-src llvm-tools-preview --toolchain nightly
+rustup install nightly && rustup component add rust-src --toolchain nightly
 ```
 
-### Сборка
-
+**Сборка и запуск:**
 ```bash
-cd pindos-0.2
-make
+make          # сборка
+make run      # BIOS режим
+make iso      # создать ISO
+qemu-system-i386 -cdrom target/pindos.iso -m 64M
 ```
 
-### Запуск в QEMU
+### Запись на железо
 
 ```bash
-make run        # BIOS режим (floppy образ)
-make run-grub   # Multiboot2/GRUB режим (как на реальном UEFI железе)
-```
-
-### Запуск на реальном железе
-
-**BIOS / CSM системы (Core 2 Duo и старше):**
-```bash
+# BIOS/CSM
 sudo dd if=target/pindos.img of=/dev/sdX bs=512 status=progress
-```
 
-**UEFI системы (современные ПК, ноутбуки):**
-```bash
-# Создать ISO с GRUB (поддерживает BIOS + UEFI)
-make iso
-# Записать на USB
+# UEFI (через ISO + GRUB)
 sudo dd if=target/pindos.iso of=/dev/sdX bs=4M status=progress
 ```
 
-**Через Ventoy (самый простой способ для UEFI):**
-1. Установить [Ventoy](https://ventoy.net) на USB флешку
-2. Скопировать `target/pindos.iso` на флешку
-3. Загрузиться с USB — выбрать PINDOS в меню Ventoy
+Через **Ventoy**: скопировать `pindos.iso` на флешку с Ventoy.
 
-**Настройки BIOS/UEFI для запуска:**
-- Secure Boot → **Disable**
-- Boot Mode → **UEFI** (для ISO с GRUB) или **Legacy/CSM** (для прямой записи)
-- Boot Order → USB первым
+**Настройки BIOS/UEFI:** Secure Boot → Disable, Boot Order → USB первым.
 
 ---
 
-## Запуск Linux программ
+## Запуск DOS и Linux программ
 
-PINDOS поддерживает запуск статически слинкованных 32-bit ELF бинарников.
+**DOS `.COM`:**
+```
+run program.com
+```
 
-Компиляция программы под PINDOS (на хост-машине):
+**Linux ELF32 (статически слинкованный):**
 ```bash
+# На хост-машине
 gcc -m32 -static -o hello hello.c
-```
-
-Загрузка в FS и запуск (внутри PINDOS пока не реализована загрузка с диска в рантайме — файлы добавляются через FS при старте ядра):
-```
+# Внутри PINDOS
 exec hello
 ```
 
@@ -280,32 +268,11 @@ exec hello
 
 ---
 
-## Запуск DOS программ
+## Требования
 
-PINDOS поддерживает `.COM` файлы через Virtual 8086 Mode.
-
-```
-run program.com
-```
-
-Поддерживаемые INT 21h функции: вывод символа/строки, ввод, работа с файлами, завершение.
-
----
-
-## Первый запуск
-
-При первом старте система запросит:
-1. Пароль для root
-2. Создание нового пользователя (имя, пароль, SU привилегии)
-
-При каждом последующем запуске — запрос логина и пароля.
-3 неверных попытки — возврат к экрану логина.
-
----
-
-## Требования к железу / эмулятору
-
-- Архитектура: x86 (i686), 32-bit
-- RAM: минимум 32MB
-- Диск: образ 1.44MB (floppy)
-- Рекомендуется: QEMU `qemu-system-i386`
+| | |
+|---|---|
+| Архитектура | x86 (i686), 32-bit |
+| RAM | минимум 32 MB |
+| Видео | VGA текст или VESA 1024×768 |
+| Рекомендуется | QEMU `qemu-system-i386` |

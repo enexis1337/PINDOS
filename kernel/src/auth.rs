@@ -183,12 +183,14 @@ fn print_divider() {
 
 // ── Первый запуск ─────────────────────────────────────────────────────────
 
-pub fn first_run_setup() {
+pub fn drun() {
     vga::clear_screen();
     print_banner();
-    vga::print_colored("=======[ver0.1]======\n", 0x0E);
+    vga::print_colored("=============[", 0x0E);
+    vga::print_colored(crate::version::OS_FULL, 0x0E);
+    vga::print_colored("]=============\n", 0x0E);
     print_divider();
-    vga::print_colored("        PINDOS First Run Setup\n", 0x0F);
+    vga::print_colored("           First dRun Setup\n", 0x0F);
     print_divider();
     vga::put_char(b'\n');
 
@@ -259,7 +261,9 @@ pub fn first_run_setup() {
 pub fn login() -> bool {
     vga::clear_screen();
     print_banner();
-    vga::print_colored("=======[ver0.1]======\n", 0x0E);
+    vga::print_colored("=============[", 0x0E);
+    vga::print_colored(crate::version::OS_FULL, 0x0E);
+    vga::print_colored("]=============\n", 0x0E);
     print_divider();
     vga::print_colored("         Welcome to PINDOS!\n", 0x0F);
     print_divider();

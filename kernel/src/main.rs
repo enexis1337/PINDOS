@@ -15,6 +15,7 @@ pub mod dos;
 pub mod linux;
 pub mod mell;
 pub mod dealduckd;
+pub mod version;
 
 use core::panic::PanicInfo;
 
@@ -123,7 +124,7 @@ pub extern "C" fn kernel_main(mb2_info: u32) -> ! {
     drivers::speaker::play_melody(drivers::speaker::MELODY_BOOT);
 
     if auth::is_first_run() {
-        auth::first_run_setup();
+        auth::drun();
     }
 
     loop {

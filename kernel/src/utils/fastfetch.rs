@@ -26,8 +26,8 @@ pub fn run() {
     vga::clear_screen();
     let shell  = "uglyshell (ush)";
     let user   = auth::current_name();
-    let os     = "PINDOS 0.2";
-    let kernel = "pindos-kernel 0.1.6";
+    let os     = crate::version::OS_FULL;
+    let kernel = crate::version::KERNEL_FULL;
     let arch   = "i686";
     let cpu    = "i686 (32-bit protected mode)";
     let mem    = "32MB total";

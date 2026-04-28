@@ -44,7 +44,7 @@ Set-Location kernel
 rustup run nightly-x86_64-pc-windows-gnu cargo build --release
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cargo build failed"; Set-Location ..; exit 1 }
 Set-Location ..
-Copy-Item "kernel/target/$TARGET/release/libpindos_kernel.a" target/
+Copy-Item "kernel/target/$TARGET/release/libhammam.a" target/
 
 # 3. Kernel entry ASM
 Write-Host "[3/7] Assembling kernel entry..."
@@ -54,7 +54,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: kernel.asm failed"; exit 1 }
 # 4. Link
 Write-Host "[4/7] Linking..."
 & $LLD -flavor ld -m elf_i386 -T linker.ld --gc-sections `
-    target/kernel_entry.o target/libpindos_kernel.a `
+    target/kernel_entry.o target/libhammam.a `
     -o target/kernel.elf
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: linking failed"; exit 1 }
 

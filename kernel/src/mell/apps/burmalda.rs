@@ -149,7 +149,7 @@ impl BurmaldaApp {
     }
     
     fn print_welcome(&mut self) {
-        self.write_str("Burmalda Terminal Emulator v1.0\r\n");
+        self.write_str("Burmalda v1.0\r\n");
         self.write_str("ANSI/VT100 compatible\r\n");
         self.write_str("Type 'help' for commands\r\n\r\n");
         self.show_prompt();

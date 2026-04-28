@@ -44,21 +44,21 @@ $(BOOT_BIN): bootloader/boot.asm | target
 	$(NASM) -f bin bootloader/boot.asm -o $(BOOT_BIN)
 
 # ── Rust ядро ──────────────────────────────────────────────────────────────
-target/libpindos_kernel.a: $(shell find kernel/src -name '*.rs') | target
+target/libhammam.a: $(shell find kernel/src -name '*.rs') | target
 	cd kernel && rustup run nightly-x86_64-pc-windows-gnu cargo build --release
-	cp kernel/target/$(TARGET)/release/libpindos_kernel.a target/
+	cp kernel/target/$(TARGET)/release/libhammam.a target/
 
 # ── ASM точка входа ────────────────────────────────────────────────────────
 target/kernel_entry.o: kernel/kernel.asm | target
 	$(NASM) -f elf32 kernel/kernel.asm -o target/kernel_entry.o
 
 # ── Линковка ───────────────────────────────────────────────────────────────
-$(KERNEL_ELF): target/kernel_entry.o target/libpindos_kernel.a linker.ld
+$(KERNEL_ELF): target/kernel_entry.o target/libhammam.a linker.ld
 	"$(LLD)" -flavor ld -m elf_i386 \
 		-T linker.ld \
 		--gc-sections \
 		target/kernel_entry.o \
-		target/libpindos_kernel.a \
+		target/libhammam.a \
 		-o $(KERNEL_ELF)
 
 # ── Flat binary ────────────────────────────────────────────────────────────

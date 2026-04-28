@@ -96,12 +96,16 @@ impl SettingsApp {
     }
 
     fn draw_system(&self, x: usize, y: usize, _w: usize, _h: usize) {
-        put_str_at(x, y,     "OS:      PINDOS 0.1",          color(BLACK, LGRAY));
-        put_str_at(x, y + 1, "Kernel:  pindos-kernel 0.1.0", color(BLACK, LGRAY));
-        put_str_at(x, y + 2, "Arch:    i686 (32-bit)",        color(BLACK, LGRAY));
-        put_str_at(x, y + 3, "Memory:  32MB",                 color(BLACK, LGRAY));
-        put_str_at(x, y + 4, "GUI:     Mell 0.1",             color(BLACK, LGRAY));
-        put_str_at(x, y + 6, "Press H to change hostname",    color(DGRAY, LGRAY));
+        use crate::version;
+        put_str_at(x,     y,     "OS:      ", color(BLACK, LGRAY));
+        put_str_at(x + 9, y,     version::OS_FULL,      color(BLACK, LGRAY));
+        put_str_at(x,     y + 1, "Kernel:  ", color(BLACK, LGRAY));
+        put_str_at(x + 9, y + 1, version::KERNEL_FULL,  color(BLACK, LGRAY));
+        put_str_at(x,     y + 2, "Arch:    i686 (32-bit)",  color(BLACK, LGRAY));
+        put_str_at(x,     y + 3, "Memory:  32MB",           color(BLACK, LGRAY));
+        put_str_at(x,     y + 4, "GUI:     ", color(BLACK, LGRAY));
+        put_str_at(x + 9, y + 4, version::DESKTOP_FULL, color(BLACK, LGRAY));
+        put_str_at(x,     y + 6, "Press H to change hostname", color(DGRAY, LGRAY));
     }
 
     fn draw_users(&self, x: usize, y: usize, _w: usize, _h: usize) {
@@ -125,17 +129,18 @@ impl SettingsApp {
     }
 
     fn draw_about(&self, x: usize, y: usize, _w: usize, _h: usize) {
-        put_str_at(x, y,      "PINDOS v0.1",                  color(LGREEN, LGRAY));
-        put_str_at(x, y + 1,  "Mell Desktop Environment",     color(BLACK, LGRAY));
-        put_str_at(x, y + 2,  "",                              color(BLACK, LGRAY));
-        put_str_at(x, y + 3,  "Built with Rust + NASM",       color(BLACK, LGRAY));
-        put_str_at(x, y + 4,  "Architecture: i686 bare metal",color(BLACK, LGRAY));
-        put_str_at(x, y + 5,  "",                              color(BLACK, LGRAY));
-        put_str_at(x, y + 6,  "Apps:",                        color(BLACK, LGRAY));
-        put_str_at(x, y + 7,  "  Mocha    - File Manager",    color(BLACK, LGRAY));
-        put_str_at(x, y + 8,  "  Qinn     - Text Editor",     color(BLACK, LGRAY));
-        put_str_at(x, y + 9,  "  Burmalda - Terminal",        color(BLACK, LGRAY));
-        put_str_at(x, y + 10, "  Settings - System Settings", color(BLACK, LGRAY));
+        use crate::version;
+        put_str_at(x, y,      version::OS_FULL,                      color(LGREEN, LGRAY));
+        put_str_at(x, y + 1,  "Mell Desktop Environment",            color(BLACK, LGRAY));
+        put_str_at(x, y + 2,  "",                                     color(BLACK, LGRAY));
+        put_str_at(x, y + 3,  "Built with Rust + NASM",              color(BLACK, LGRAY));
+        put_str_at(x, y + 4,  "Architecture: i686 bare metal",       color(BLACK, LGRAY));
+        put_str_at(x, y + 5,  "",                                     color(BLACK, LGRAY));
+        put_str_at(x, y + 6,  "Apps:",                               color(BLACK, LGRAY));
+        put_str_at(x, y + 7,  "  Mocha    - File Manager",           color(BLACK, LGRAY));
+        put_str_at(x, y + 8,  "  Qinn     - Text Editor",            color(BLACK, LGRAY));
+        put_str_at(x, y + 9,  "  Burmalda - Terminal",               color(BLACK, LGRAY));
+        put_str_at(x, y + 10, "  Settings - System Settings",        color(BLACK, LGRAY));
     }
 
     // ── Обработка клавиш ──────────────────────────────────────────────────
