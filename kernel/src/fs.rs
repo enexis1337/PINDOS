@@ -1,9 +1,9 @@
 // PINDOS filesystem — поддержка директорий и путей
 
-pub const MAX_ENTRIES: usize = 128;
+pub const MAX_ENTRIES: usize = 64;
 pub const MAX_NAME:    usize = 64;
 pub const MAX_PATH:    usize = 128;
-pub const MAX_CONTENT: usize = 4096;
+pub const MAX_CONTENT: usize = 512 * 1024; // 512 КБ для MP3
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum EntryKind { File, Dir }
@@ -39,6 +39,9 @@ impl Entry {
     pub fn content_str(&self) -> &str {
         core::str::from_utf8(&self.content[..self.content_len]).unwrap_or("")
     }
+    pub fn content_bytes(&self) -> &[u8] {
+        &self.content[..self.content_len]
+    }
     pub fn is_dir(&self) -> bool { self.kind == EntryKind::Dir }
 }
 
@@ -70,6 +73,10 @@ pub fn init() {
     create_abs("/", "readme.txt", EntryKind::File,
         "Welcome to PINDOS!\nType 'help' for commands.\n");
     create_abs("/home", "notes.txt", EntryKind::File, "Your notes here.\n");
+    
+    // Встроенный MP3
+    let dima_mp3 = include_bytes!("dima.mp3");
+    create_abs_binary("/", "dima.mp3", EntryKind::File, dima_mp3);
 }
 
 // ── Внутренние хелперы ────────────────────────────────────────────────────
@@ -118,6 +125,24 @@ fn create_abs(parent: &str, name: &str, kind: EntryKind, content: &str) -> bool 
                 let cb = content.as_bytes();
                 let clen = cb.len().min(MAX_CONTENT);
                 slot.content[..clen].copy_from_slice(&cb[..clen]);
+                slot.content_len = clen;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn create_abs_binary(parent: &str, name: &str, kind: EntryKind, content: &[u8]) -> bool {
+    unsafe {
+        for slot in FS.iter_mut() {
+            if !slot.used {
+                slot.used = true;
+                slot.kind = kind;
+                set_name(slot, name);
+                set_path(slot, parent);
+                let clen = content.len().min(MAX_CONTENT);
+                slot.content[..clen].copy_from_slice(&content[..clen]);
                 slot.content_len = clen;
                 return true;
             }
