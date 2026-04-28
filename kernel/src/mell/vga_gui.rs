@@ -14,6 +14,26 @@ pub const SCR_H: usize = 48;   // 768 / 16
 pub const VGA_WIDTH:  usize = SCR_W;
 pub const VGA_HEIGHT: usize = SCR_H;
 
+#[inline]
+pub fn screen_cols() -> usize {
+    let fb = vesa::get();
+    if fb.ready && fb.width >= FONT_W {
+        (fb.width / FONT_W) as usize
+    } else {
+        SCR_W
+    }
+}
+
+#[inline]
+pub fn screen_rows() -> usize {
+    let fb = vesa::get();
+    if fb.ready && fb.height >= FONT_H {
+        (fb.height / FONT_H) as usize
+    } else {
+        SCR_H
+    }
+}
+
 // ── Цвета (0x00RRGGBB) ────────────────────────────────────────────────────
 
 pub const BLACK:    u32 = 0x000000;
@@ -34,20 +54,20 @@ pub const YELLOW:   u32 = 0xFFFF55;
 pub const WHITE:    u32 = 0xFFFFFF;
 
 // Mell цвета
-pub const MELL_DESKTOP:  u32 = 0x2D6A4F;  // тёмно-зелёный рабочий стол
-pub const MELL_TITLEBAR: u32 = 0x3A3A3A;  // заголовок окна
-pub const MELL_TITLEBAR_ACTIVE: u32 = 0x1E5799; // активный заголовок
-pub const MELL_WINDOW:   u32 = 0xF0F0F0;  // фон окна
-pub const MELL_TASKBAR:  u32 = 0x2B2B2B;  // нижняя панель
-pub const MELL_TOPBAR:   u32 = 0x1A1A1A;  // верхняя панель
-pub const MELL_BORDER:   u32 = 0x888888;  // рамка окна
+pub const MELL_DESKTOP:  u32 = 0x008080;  // classic Windows 95 teal
+pub const MELL_TITLEBAR: u32 = 0x808080;  // inactive titlebar
+pub const MELL_TITLEBAR_ACTIVE: u32 = 0x000080; // active titlebar
+pub const MELL_WINDOW:   u32 = 0xC0C0C0;  // classic 3D gray
+pub const MELL_TASKBAR:  u32 = 0xC0C0C0;  // taskbar gray
+pub const MELL_TOPBAR:   u32 = 0xC0C0C0;  // helper panel gray
+pub const MELL_BORDER:   u32 = 0x000000;  // black outer edge
 pub const MELL_TEXT:     u32 = 0x000000;
 pub const MELL_TEXT_LIGHT: u32 = 0xFFFFFF;
 
-// Цвета кнопок окна (macOS-стиль)
-pub const BTN_CLOSE:  u32 = 0xFF5F57;
-pub const BTN_MIN:    u32 = 0xFFBD2E;
-pub const BTN_MAX:    u32 = 0x28C840;
+// Цвета кнопок окна
+pub const BTN_CLOSE:  u32 = 0xC0C0C0;
+pub const BTN_MIN:    u32 = 0xC0C0C0;
+pub const BTN_MAX:    u32 = 0xC0C0C0;
 
 // ── Конвертация символьных координат в пиксельные ─────────────────────────
 
@@ -101,6 +121,8 @@ pub fn draw_vline(cx: usize, cy: usize, ch: usize, color: u32) {
 // ── Окно ──────────────────────────────────────────────────────────────────
 
 pub const TITLEBAR_H: usize = 2; // высота заголовка в символах
+const CONTROL_BTN_SIZE: u32 = 14;
+const CONTROL_BTN_RIGHT_PAD: u32 = 18;
 
 pub struct Window {
     pub x: usize, pub y: usize,  // символьные координаты
@@ -120,41 +142,52 @@ impl Window {
         let pw0 = pw(self.w);
         let ph0 = ph(self.h);
 
-        // Тень
-        vesa::fill_rect_fast(px0 + 4, py0 + 4, pw0, ph0, 0x00000066 & 0x1A1A1A);
+        let tb_color = if self.focused { MELL_TITLEBAR_ACTIVE } else { MELL_TITLEBAR };
+        let title_h = ph(TITLEBAR_H);
 
-        // Тело окна
-        vesa::fill_rect_fast(px0, py0 + ph(TITLEBAR_H), pw0, ph0 - ph(TITLEBAR_H), MELL_WINDOW);
+        // Тень
+        vesa::fill_rect_fast(px0 + 3, py0 + 3, pw0, ph0, 0x202020);
+
+        // Основа окна
+        vesa::fill_rect_fast(px0, py0, pw0, ph0, MELL_WINDOW);
+        draw_frame_3d(px0, py0, pw0, ph0, true);
 
         // Заголовок
-        let tb_color = if self.focused { MELL_TITLEBAR_ACTIVE } else { MELL_TITLEBAR };
-        vesa::fill_rect_fast(px0, py0, pw0, ph(TITLEBAR_H), tb_color);
-
-        // Заголовок — градиент (нижняя строка чуть темнее)
-        let tb_dark = darken(tb_color, 30);
-        vesa::fill_rect_fast(px0, py0 + ph(TITLEBAR_H) - 1, pw0, 1, tb_dark);
+        let inner_title_x = px0 + 3;
+        let inner_title_y = py0 + 3;
+        let inner_title_w = pw0.saturating_sub(6);
+        let inner_title_h = title_h.saturating_sub(4).max(12);
+        vesa::fill_rect_fast(inner_title_x, inner_title_y, inner_title_w, inner_title_h, tb_color);
 
         // Текст заголовка
         let title_y = self.y + (TITLEBAR_H - 1) / 2;
-        put_str_at_bg(self.x + 4, title_y, self.title, WHITE, tb_color);
+        put_str_at_bg(self.x + 2, title_y, self.title, WHITE, tb_color);
 
-        // Кнопки (macOS-стиль): красная=закрыть, жёлтая=развернуть, зелёная=свернуть
-        // Расположены справа в заголовке, в пикселях
-        let btn_y = py0 + ph(TITLEBAR_H) / 2 - 5;
-        let btn_x_base = px0 + pw0 - 14;  // правый край - отступ
-        draw_circle_btn(btn_x_base,       btn_y, BTN_CLOSE);   // красная — закрыть
-        draw_circle_btn(btn_x_base - 20,  btn_y, BTN_MIN);     // жёлтая — развернуть
-        draw_circle_btn(btn_x_base - 40,  btn_y, BTN_MAX);     // зелёная — свернуть
+        // Кнопки управления окном в стиле Win95
+        let btn_y = self.btn_y_px();
+        let btn_close_x = self.close_btn_x_px();
+        let btn_max_x = self.max_btn_x_px();
+        let btn_min_x = self.min_btn_x_px();
+        draw_win95_button_px(btn_min_x, btn_y, CONTROL_BTN_SIZE, CONTROL_BTN_SIZE, BTN_MIN, false);
+        draw_win95_button_px(btn_max_x, btn_y, CONTROL_BTN_SIZE, CONTROL_BTN_SIZE, BTN_MAX, false);
+        draw_win95_button_px(btn_close_x, btn_y, CONTROL_BTN_SIZE, CONTROL_BTN_SIZE, BTN_CLOSE, false);
+        draw_min_glyph(btn_min_x + 3, btn_y + 8);
+        draw_max_glyph(btn_max_x + 3, btn_y + 3);
+        draw_close_glyph(btn_close_x + 4, btn_y + 4);
 
-        // Resize handle — правый нижний угол
-        let rx = px0 + pw0 - 12;
-        let ry = py0 + ph0 - 12;
-        vesa::fill_rect_fast(rx,     ry + 8,  10, 2, MELL_BORDER);
-        vesa::fill_rect_fast(rx + 4, ry + 4,  2,  6, MELL_BORDER);
-        vesa::fill_rect_fast(rx + 8, ry,      2,  10, MELL_BORDER);
+        // Клиентская область
+        let client_y = py0 + title_h;
+        let client_h = ph0.saturating_sub(title_h + 2);
+        vesa::fill_rect_fast(px0 + 2, client_y, pw0.saturating_sub(4), client_h, MELL_WINDOW);
+        draw_frame_3d(px0 + 2, client_y, pw0.saturating_sub(4), client_h, false);
 
-        // Рамка окна
-        vesa::draw_rect_outline(px0, py0, pw0, ph0, MELL_BORDER);
+        // Уголок для resize, чтобы было видно что окно можно тянуть
+        let grip_x = px0 + pw0.saturating_sub(16);
+        let grip_y = py0 + ph0.saturating_sub(16);
+        for i in 0..4u32 {
+            vesa::draw_hline(grip_x + i * 4, grip_y + 14, 2, DGRAY);
+            vesa::draw_hline(grip_x + i * 4 + 1, grip_y + 12, 2, WHITE);
+        }
     }
 
     pub fn inner_x(&self) -> usize { self.x + 1 }
@@ -163,46 +196,67 @@ impl Window {
     pub fn inner_h(&self) -> usize { self.h.saturating_sub(TITLEBAR_H + 1) }
 
     // Хит-тесты кнопок в пиксельных координатах
-    // Кнопки: красная(закрыть) — правая, жёлтая(развернуть) — средняя, зелёная(свернуть) — левая
-    fn btn_base_px(&self) -> u32 {
-        px(self.x) + pw(self.w) - 14
+    fn close_btn_x_px(&self) -> u32 {
+        px(self.x) + pw(self.w).saturating_sub(CONTROL_BTN_RIGHT_PAD)
+    }
+    fn max_btn_x_px(&self) -> u32 {
+        self.close_btn_x_px().saturating_sub(CONTROL_BTN_SIZE)
+    }
+    fn min_btn_x_px(&self) -> u32 {
+        self.max_btn_x_px().saturating_sub(CONTROL_BTN_SIZE)
     }
     fn btn_y_px(&self) -> u32 {
-        py(self.y) + ph(TITLEBAR_H) / 2 - 5
+        py(self.y) + 4
+    }
+    fn point_in_rect_px(&self, mpx: usize, mpy: usize, x: u32, y: u32, w: u32, h: u32) -> bool {
+        (mpx as u32) >= x && (mpx as u32) < x + w &&
+        (mpy as u32) >= y && (mpy as u32) < y + h
     }
 
     /// Клик по красной кнопке (закрыть)
     pub fn close_btn_clicked_px(&self, mpx: usize, mpy: usize) -> bool {
-        let bx = self.btn_base_px();
-        let by = self.btn_y_px();
-        (mpx as u32) >= bx && (mpx as u32) < bx + 12 &&
-        (mpy as u32) >= by && (mpy as u32) < by + 12
+        self.point_in_rect_px(
+            mpx,
+            mpy,
+            self.close_btn_x_px(),
+            self.btn_y_px(),
+            CONTROL_BTN_SIZE,
+            CONTROL_BTN_SIZE,
+        )
     }
 
     /// Клик по жёлтой кнопке (развернуть/восстановить)
     pub fn max_btn_clicked_px(&self, mpx: usize, mpy: usize) -> bool {
-        let bx = self.btn_base_px() - 20;
-        let by = self.btn_y_px();
-        (mpx as u32) >= bx && (mpx as u32) < bx + 12 &&
-        (mpy as u32) >= by && (mpy as u32) < by + 12
+        self.point_in_rect_px(
+            mpx,
+            mpy,
+            self.max_btn_x_px(),
+            self.btn_y_px(),
+            CONTROL_BTN_SIZE,
+            CONTROL_BTN_SIZE,
+        )
     }
 
     /// Клик по зелёной кнопке (свернуть)
     pub fn min_btn_clicked_px(&self, mpx: usize, mpy: usize) -> bool {
-        let bx = self.btn_base_px() - 40;
-        let by = self.btn_y_px();
-        (mpx as u32) >= bx && (mpx as u32) < bx + 12 &&
-        (mpy as u32) >= by && (mpy as u32) < by + 12
+        self.point_in_rect_px(
+            mpx,
+            mpy,
+            self.min_btn_x_px(),
+            self.btn_y_px(),
+            CONTROL_BTN_SIZE,
+            CONTROL_BTN_SIZE,
+        )
     }
 
     /// Клик по заголовку (для drag), исключая кнопки
     pub fn title_bar_clicked_px(&self, mpx: usize, mpy: usize) -> bool {
         let px0 = px(self.x) as usize;
         let py0 = py(self.y) as usize;
-        let pw0 = pw(self.w) as usize;
         let ph_tb = ph(TITLEBAR_H) as usize;
+        let title_right = self.min_btn_x_px().saturating_sub(4) as usize;
         // В пределах заголовка, но левее кнопок
-        mpx >= px0 && mpx < px0 + pw0 - 50 &&
+        mpx >= px0 && mpx < title_right &&
         mpy >= py0 && mpy < py0 + ph_tb
     }
 
@@ -238,12 +292,46 @@ impl Window {
     }
 }
 
-fn draw_circle_btn(px: u32, py: u32, color: u32) {
-    // Круглая кнопка 10x10
-    vesa::fill_rect_fast(px + 1, py,     8, 10, color);
-    vesa::fill_rect_fast(px,     py + 1, 10, 8,  color);
-    // Блик
-    vesa::fill_rect_fast(px + 2, py + 1, 4, 2, lighten(color, 60));
+fn draw_frame_3d(x: u32, y: u32, w: u32, h: u32, raised: bool) {
+    if w < 2 || h < 2 {
+        return;
+    }
+
+    let light = if raised { WHITE } else { DGRAY };
+    let shadow = if raised { DGRAY } else { WHITE };
+    let dark = BLACK;
+
+    vesa::draw_hline(x, y, w, light);
+    vesa::draw_vline(x, y, h, light);
+    vesa::draw_hline(x, y + h - 1, w, dark);
+    vesa::draw_vline(x + w - 1, y, h, dark);
+
+    if w > 4 && h > 4 {
+        vesa::draw_hline(x + 1, y + 1, w - 2, shadow);
+        vesa::draw_vline(x + 1, y + 1, h - 2, shadow);
+        vesa::draw_hline(x + 1, y + h - 2, w - 2, dark);
+        vesa::draw_vline(x + w - 2, y + 1, h - 2, dark);
+    }
+}
+
+fn draw_win95_button_px(x: u32, y: u32, w: u32, h: u32, color: u32, pressed: bool) {
+    vesa::fill_rect_fast(x, y, w, h, color);
+    draw_frame_3d(x, y, w, h, !pressed);
+}
+
+fn draw_close_glyph(x: u32, y: u32) {
+    for i in 0..6 {
+        vesa::put_pixel(x + i, y + i, BLACK);
+        vesa::put_pixel(x + 5 - i, y + i, BLACK);
+    }
+}
+
+fn draw_min_glyph(x: u32, y: u32) {
+    vesa::fill_rect_fast(x, y, 7, 2, BLACK);
+}
+
+fn draw_max_glyph(x: u32, y: u32) {
+    vesa::draw_rect_outline(x, y, 8, 7, BLACK);
 }
 
 pub fn darken(c: u32, amt: u32) -> u32 {
@@ -263,57 +351,52 @@ pub fn lighten(c: u32, amt: u32) -> u32 {
 // ── Кнопка ────────────────────────────────────────────────────────────────
 
 pub fn draw_button(cx: usize, cy: usize, label: &str, active: bool) {
-    let bg = if active { 0x1E5799u32 } else { 0x555555u32 };
-    let fg = WHITE;
+    let bg = if active { 0xB8CCE4u32 } else { MELL_WINDOW };
+    let fg = BLACK;
     let cw = label.len() + 2;
-
-    // Фон кнопки
-    vesa::fill_rect_fast(px(cx), py(cy), pw(cw), ph(1), bg);
-    // Блик сверху
-    vesa::fill_rect_fast(px(cx), py(cy), pw(cw), 2, lighten(bg, 40));
-    // Текст
+    let x = px(cx);
+    let y = py(cy);
+    let w = pw(cw);
+    let h = ph(1).max(18);
+    draw_win95_button_px(x, y, w, h, bg, active);
     put_str_at_bg(cx + 1, cy, label, fg, bg);
 }
 
 // ── Иконки ────────────────────────────────────────────────────────────────
 
 pub fn draw_folder_icon(cx: usize, cy: usize, name: &str, selected: bool) {
-    let icon_bg  = if selected { 0x5599FFu32 } else { 0xF0C040u32 };
-    let label_fg = if selected { WHITE } else { MELL_TEXT_LIGHT };
-    let label_bg = if selected { 0x3377DDu32 } else { MELL_DESKTOP };
+    let icon_bg  = 0xD6B04A;
+    let label_fg = WHITE;
+    let label_bg = if selected { 0x000080 } else { MELL_DESKTOP };
 
     let x = px(cx);
     let y = py(cy);
 
-    // Тело папки (32x24)
-    vesa::fill_rect_fast(x, y + 4, 32, 20, icon_bg);
-    // Язычок папки
-    vesa::fill_rect_fast(x, y, 14, 6, lighten(icon_bg, 30));
-    // Блик
-    vesa::fill_rect_fast(x + 2, y + 6, 28, 3, lighten(icon_bg, 50));
+    vesa::fill_rect_fast(x + 2, y + 6, 28, 18, icon_bg);
+    draw_frame_3d(x + 2, y + 6, 28, 18, true);
+    vesa::fill_rect_fast(x + 4, y + 2, 12, 8, lighten(icon_bg, 12));
+    draw_frame_3d(x + 4, y + 2, 12, 8, true);
+    vesa::fill_rect_fast(x + 4, y + 11, 24, 2, lighten(icon_bg, 24));
 
-    // Имя под иконкой
     let name_cx = cx.saturating_sub(name.len() / 2);
     put_str_at_bg(name_cx, cy + 3, name, label_fg, label_bg);
 }
 
 pub fn draw_file_icon(cx: usize, cy: usize, name: &str, selected: bool) {
-    let icon_bg  = if selected { 0x5599FFu32 } else { 0xFFFFFFu32 };
-    let label_fg = if selected { WHITE } else { MELL_TEXT_LIGHT };
-    let label_bg = if selected { 0x3377DDu32 } else { MELL_DESKTOP };
+    let icon_bg  = WHITE;
+    let label_fg = WHITE;
+    let label_bg = if selected { 0x000080 } else { MELL_DESKTOP };
 
     let x = px(cx);
     let y = py(cy);
 
-    // Тело файла (28x32)
     vesa::fill_rect_fast(x, y, 28, 32, icon_bg);
-    // Загнутый угол
-    vesa::fill_rect_fast(x + 20, y, 8, 8, MELL_DESKTOP);
-    vesa::fill_rect_fast(x + 20, y + 8, 8, 1, MELL_BORDER);
-    vesa::fill_rect_fast(x + 20, y, 1, 8, MELL_BORDER);
-    // Линии текста
+    draw_frame_3d(x, y, 28, 32, true);
+    vesa::fill_rect_fast(x + 18, y + 2, 7, 7, 0xE0E0E0);
+    vesa::draw_hline(x + 18, y + 9, 7, DGRAY);
+    vesa::draw_vline(x + 18, y + 2, 7, DGRAY);
     for i in 0..4u32 {
-        vesa::fill_rect_fast(x + 4, y + 12 + i * 5, 20, 2, 0xCCCCCCu32);
+        vesa::fill_rect_fast(x + 4, y + 12 + i * 5, 18, 2, 0x808080);
     }
 
     let name_cx = cx.saturating_sub(name.len() / 2);
@@ -424,8 +507,8 @@ pub fn draw_cursor(mx: u32, my: u32) {
 
         for col in 0..CW {
             let mask = 0x8000u16 >> col;
-            let px = mx + col;
-            let py = my + row;
+            let px = mx.saturating_add(col);
+            let py = my.saturating_add(row);
             if px >= fb.width || py >= fb.height { continue; }
 
             if shape_bits & mask != 0 {

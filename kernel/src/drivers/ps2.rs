@@ -327,6 +327,32 @@ static mut MOUSE_PACKET: [u8; 3] = [0u8; 3];
 pub const SCREEN_W: i32 = 1024;
 pub const SCREEN_H: i32 = 768;
 
+fn mouse_bounds() -> (i32, i32) {
+    let fb = crate::drivers::vesa::get();
+    if fb.ready {
+        (fb.width as i32, fb.height as i32)
+    } else {
+        (SCREEN_W, SCREEN_H)
+    }
+}
+
+fn scale_mouse_delta(delta: i8) -> i32 {
+    let abs = (delta as i32).abs();
+    if abs == 0 {
+        return 0;
+    }
+
+    let scaled = match abs {
+        1 => 1,
+        2 => 3,
+        3 => 4,
+        4..=6 => abs + 2,
+        _ => abs * 2,
+    };
+
+    if delta < 0 { -scaled } else { scaled }
+}
+
 fn init_mouse() {
     // Включаем вспомогательное устройство
     send_cmd(CMD_ENABLE_PORT2);
@@ -361,10 +387,13 @@ pub fn poll_mouse() -> bool {
 
             // Проверяем overflow биты и валидность пакета
             if flags & 0x08 != 0 && flags & 0xC0 == 0 {
-                MOUSE.dx = dx;
-                MOUSE.dy = -dy; // Y инвертирован
-                MOUSE.x = (MOUSE.x + dx as i32).max(0).min(SCREEN_W - 1);
-                MOUSE.y = (MOUSE.y - dy as i32).max(0).min(SCREEN_H - 1);
+                let (screen_w, screen_h) = mouse_bounds();
+                let scaled_dx = scale_mouse_delta(dx);
+                let scaled_dy = scale_mouse_delta(-dy);
+                MOUSE.dx = scaled_dx.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+                MOUSE.dy = scaled_dy.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+                MOUSE.x = (MOUSE.x + scaled_dx).max(0).min(screen_w.saturating_sub(1));
+                MOUSE.y = (MOUSE.y + scaled_dy).max(0).min(screen_h.saturating_sub(1));
                 MOUSE.buttons = flags & 0x07;
                 return true;
             }

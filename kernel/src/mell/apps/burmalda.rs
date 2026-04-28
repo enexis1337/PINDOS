@@ -205,6 +205,7 @@ impl BurmaldaApp {
                 self.cursor_x = 0;
             }
             b'\n' => {
+                self.cursor_x = 0;
                 self.cursor_y += 1;
                 if self.cursor_y > self.scroll_bottom {
                     self.scroll_up();
@@ -695,8 +696,7 @@ impl BurmaldaApp {
                 cmd_buf[..cmd_len].copy_from_slice(&self.input_buffer[..cmd_len]);
                 let cmd_str = core::str::from_utf8(&cmd_buf[..cmd_len])
                     .unwrap_or("");
-                
-                self.write_str(cmd_str);
+
                 self.write_str("\r\n");
                 
                 // Сохраняем в историю команд
@@ -878,7 +878,7 @@ impl BurmaldaApp {
         self.write_str(input_str);
         
         // Устанавливаем курсор в правильную позицию
-        self.cursor_x = user.len() + 8 + cwd.len() + self.input_pos;
+        self.cursor_x = user.len() + 10 + cwd.len() + self.input_pos;
     }
 
     fn execute_command(&mut self, cmd: &str) {
@@ -911,8 +911,8 @@ impl BurmaldaApp {
         
         // Выполняем команду через shell
         let output = crate::uglyshell::capture_command(cmd);
-        if output.len > 0 {
-            self.write_str(output.as_str());
+        if !output.is_empty() {
+            self.write_str(output);
         }
     }
     
@@ -1017,7 +1017,7 @@ impl BurmaldaApp {
         
         // Позиционируем курсор ввода (если в режиме ввода)
         if self.input_mode && y == self.cursor_y {
-            let prompt_len = crate::auth::current_name().len() + 8 + crate::fs::cwd().len();
+            let prompt_len = crate::auth::current_name().len() + 10 + crate::fs::cwd().len();
             if x >= prompt_len {
                 let new_pos = (x - prompt_len).min(self.input_len);
                 self.input_pos = new_pos;

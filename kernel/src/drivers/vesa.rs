@@ -6,6 +6,10 @@
 
 // Глобальный framebuffer
 static mut FB: Framebuffer = Framebuffer::empty();
+const BACKBUFFER_W: usize = 1024;
+const BACKBUFFER_H: usize = 768;
+static mut BACKBUFFER: [u32; BACKBUFFER_W * BACKBUFFER_H] = [0; BACKBUFFER_W * BACKBUFFER_H];
+static mut BACKBUFFER_ENABLED: bool = false;
 
 #[derive(Copy, Clone)]
 pub struct Framebuffer {
@@ -15,11 +19,12 @@ pub struct Framebuffer {
     pub pitch:  u32,   // байт на строку
     pub bpp:    u8,    // бит на пиксель (32, 24, 16)
     pub ready:  bool,
+    pub active: bool,
 }
 
 impl Framebuffer {
     const fn empty() -> Self {
-        Framebuffer { addr: 0, width: 0, height: 0, pitch: 0, bpp: 0, ready: false }
+        Framebuffer { addr: 0, width: 0, height: 0, pitch: 0, bpp: 0, ready: false, active: false }
     }
 
     pub fn bytes_per_pixel(&self) -> u32 {
@@ -29,6 +34,77 @@ impl Framebuffer {
 
 pub fn get() -> &'static Framebuffer {
     unsafe { &FB }
+}
+
+#[inline]
+fn backbuffer_index(x: u32, y: u32) -> usize {
+    y as usize * BACKBUFFER_W + x as usize
+}
+
+#[inline]
+fn can_use_backbuffer(fb: &Framebuffer) -> bool {
+    fb.bpp == 32 && (fb.width as usize) <= BACKBUFFER_W && (fb.height as usize) <= BACKBUFFER_H
+}
+
+#[inline]
+fn put_pixel_hw(fb: &Framebuffer, x: u32, y: u32, color: u32) {
+    let offset = y * fb.pitch + x * fb.bytes_per_pixel();
+    let ptr = (fb.addr + offset) as *mut u8;
+
+    unsafe {
+        match fb.bpp {
+            32 => {
+                core::ptr::write_volatile(ptr as *mut u32, color);
+            }
+            24 => {
+                core::ptr::write_volatile(ptr, (color & 0xFF) as u8);
+                core::ptr::write_volatile(ptr.add(1), ((color >> 8) & 0xFF) as u8);
+                core::ptr::write_volatile(ptr.add(2), ((color >> 16) & 0xFF) as u8);
+            }
+            16 => {
+                let r = ((color >> 16) & 0xFF) >> 3;
+                let g = ((color >> 8)  & 0xFF) >> 2;
+                let b = (color & 0xFF) >> 3;
+                let px = ((r << 11) | (g << 5) | b) as u16;
+                core::ptr::write_volatile(ptr as *mut u16, px);
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn enable_backbuffer() {
+    let fb = unsafe { &FB };
+    if fb.ready && can_use_backbuffer(fb) {
+        unsafe { BACKBUFFER_ENABLED = true; }
+    }
+}
+
+pub fn disable_backbuffer() {
+    unsafe { BACKBUFFER_ENABLED = false; }
+}
+
+pub fn backbuffer_enabled() -> bool {
+    unsafe { BACKBUFFER_ENABLED }
+}
+
+pub fn present() {
+    let fb = unsafe { &FB };
+    if !fb.ready || !backbuffer_enabled() || !can_use_backbuffer(fb) {
+        return;
+    }
+
+    for row in 0..fb.height {
+        let src_row = row as usize * BACKBUFFER_W;
+        let row_base = fb.addr + row * fb.pitch;
+        for col in 0..fb.width {
+            let color = unsafe { BACKBUFFER[src_row + col as usize] };
+            let ptr = (row_base + col * 4) as *mut u32;
+            unsafe {
+                core::ptr::write_volatile(ptr, color);
+            }
+        }
+    }
 }
 
 // ── Инициализация из Multiboot2 ───────────────────────────────────────────
@@ -60,6 +136,7 @@ pub fn init_from_multiboot2(mb2_info: u32) {
                             pitch:  fb.pitch,
                             bpp:    fb.bpp,
                             ready:  true,
+                            active: true,
                         };
                         return;
                     }
@@ -122,6 +199,7 @@ pub fn init_from_bios_info() {
             pitch:  info.pitch as u32,
             bpp:    info.bpp,
             ready:  true,
+            active: true,
         };
     }
 }
@@ -176,6 +254,7 @@ pub fn init_from_multiboot1(mb1_info: u32) {
             pitch:  info.fb_pitch,
             bpp:    info.fb_bpp,
             ready:  true,
+            active: true,
         };
     }
 }
@@ -191,7 +270,8 @@ pub fn probe_only() {
                 height: 768,
                 pitch:  1024 * 4,
                 bpp:    32,
-                ready:  true,  // помечаем как найденный, но LFB ещё не включён
+                ready:  true,  // framebuffer найден, но режим ещё не активирован
+                active: false,
             };
         }
     }
@@ -217,6 +297,12 @@ pub fn enable_lfb() {
         core::arch::asm!("out dx, ax", in("dx") 0x01CEu16, in("ax") index);
         core::arch::asm!("out dx, ax", in("dx") 0x01CFu16, in("ax") value);
     }
+    unsafe fn vbe_read(index: u16) -> u16 {
+        let v: u16;
+        core::arch::asm!("out dx, ax", in("dx") 0x01CEu16, in("ax") index);
+        core::arch::asm!("in ax, dx", out("ax") v, in("dx") 0x01CFu16);
+        v
+    }
 
     let (w, h, bpp) = unsafe { (FB.width as u16, FB.height as u16, FB.bpp as u16) };
 
@@ -231,6 +317,20 @@ pub fn enable_lfb() {
         vbe_write(VBE_DISPI_INDEX_Y_OFFSET, 0);
         vbe_write(VBE_DISPI_INDEX_ENABLE,
             VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_NOCLEARMEM);
+
+        let real_w = vbe_read(VBE_DISPI_INDEX_XRES) as u32;
+        let real_h = vbe_read(VBE_DISPI_INDEX_YRES) as u32;
+        let real_bpp = vbe_read(VBE_DISPI_INDEX_BPP) as u8;
+        let virt_w = vbe_read(VBE_DISPI_INDEX_VIRT_WIDTH) as u32;
+        let bytes_pp = (real_bpp as u32 + 7) / 8;
+
+        if real_w != 0 && real_h != 0 && real_bpp != 0 {
+            FB.width = real_w;
+            FB.height = real_h;
+            FB.bpp = real_bpp;
+            FB.pitch = virt_w.max(real_w) * bytes_pp;
+            FB.active = true;
+        }
     }
 }
 
@@ -262,7 +362,7 @@ pub fn try_qemu_vga_std() {
     }
 
     unsafe {
-        // Проверяем ID — должен быть 0xB0C0..0xB0C6
+        // Проверяем ID — должен быть 0xB0C0..0xB0CF
         let id = vbe_read(VBE_DISPI_INDEX_ID);
         if id < 0xB0C0 || id > 0xB0CF {
             return; // Bochs VGA не найден
@@ -283,23 +383,33 @@ pub fn try_qemu_vga_std() {
         vbe_write(VBE_DISPI_INDEX_ENABLE,
             VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_NOCLEARMEM);
 
-        // Читаем реальный адрес LFB из PCI конфигурации Bochs VGA (vendor 0x1234, device 0x1111)
-        // BAR0 = framebuffer address
-        let fb_addr = pci_read_bochs_lfb_addr().unwrap_or(0xE0000000);
+        let real_w = vbe_read(VBE_DISPI_INDEX_XRES) as u32;
+        let real_h = vbe_read(VBE_DISPI_INDEX_YRES) as u32;
+        let real_bpp = vbe_read(VBE_DISPI_INDEX_BPP) as u8;
+        let virt_w = vbe_read(VBE_DISPI_INDEX_VIRT_WIDTH) as u32;
+        let bytes_pp = (real_bpp as u32 + 7) / 8;
+
+        let (bar0, _bar2, _cmd) = pci_enable_bochs_vga().unwrap_or((0, 0, 0));
+
+        let fb_addr = if bar0 != 0 { bar0 } else { 0xE0000000 };
 
         FB = Framebuffer {
             addr:   fb_addr,
-            width:  W as u32,
-            height: H as u32,
-            pitch:  W as u32 * 4,
-            bpp:    BPP as u8,
+            width:  if real_w != 0 { real_w } else { W as u32 },
+            height: if real_h != 0 { real_h } else { H as u32 },
+            pitch:  if virt_w != 0 && bytes_pp != 0 { virt_w * bytes_pp } else { W as u32 * 4 },
+            bpp:    if real_bpp != 0 { real_bpp } else { BPP as u8 },
             ready:  true,
+            active: true,
         };
     }
 }
 
-/// Читаем BAR0 Bochs VGA через PCI (vendor=0x1234, device=0x1111)
 fn pci_read_bochs_lfb_addr() -> Option<u32> {
+    pci_read_bochs_bars().map(|(bar0, _, _)| bar0)
+}
+
+fn pci_read_bochs_bars() -> Option<(u32, u32, u16)> {
     unsafe fn pci_read32(bus: u8, dev: u8, func: u8, offset: u8) -> u32 {
         let addr: u32 = 0x80000000
             | ((bus as u32) << 16)
@@ -318,7 +428,52 @@ fn pci_read_bochs_lfb_addr() -> Option<u32> {
                 let id = pci_read32(bus, dev, 0, 0x00);
                 if id == 0x11111234 { // Bochs VGA: vendor=0x1234, device=0x1111
                     let bar0 = pci_read32(bus, dev, 0, 0x10);
-                    return Some(bar0 & 0xFFFFFFF0); // убираем флаги
+                    let bar2 = pci_read32(bus, dev, 0, 0x18);
+                    let cmd = (pci_read32(bus, dev, 0, 0x04) & 0xFFFF) as u16;
+                    return Some((bar0 & 0xFFFFFFF0, bar2 & 0xFFFFFFF0, cmd));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pci_enable_bochs_vga() -> Option<(u32, u32, u16)> {
+    unsafe fn pci_read32(bus: u8, dev: u8, func: u8, offset: u8) -> u32 {
+        let addr: u32 = 0x80000000
+            | ((bus as u32) << 16)
+            | ((dev as u32) << 11)
+            | ((func as u32) << 8)
+            | (offset as u32 & 0xFC);
+        core::arch::asm!("out dx, eax", in("dx") 0xCF8u16, in("eax") addr);
+        let v: u32;
+        core::arch::asm!("in eax, dx", out("eax") v, in("dx") 0xCFCu16);
+        v
+    }
+
+    unsafe fn pci_write32(bus: u8, dev: u8, func: u8, offset: u8, value: u32) {
+        let addr: u32 = 0x80000000
+            | ((bus as u32) << 16)
+            | ((dev as u32) << 11)
+            | ((func as u32) << 8)
+            | (offset as u32 & 0xFC);
+        core::arch::asm!("out dx, eax", in("dx") 0xCF8u16, in("eax") addr);
+        core::arch::asm!("out dx, eax", in("dx") 0xCFCu16, in("eax") value);
+    }
+
+    unsafe {
+        for bus in 0u8..=255 {
+            for dev in 0u8..32 {
+                let id = pci_read32(bus, dev, 0, 0x00);
+                if id == 0x11111234 {
+                    let mut cmd_status = pci_read32(bus, dev, 0, 0x04);
+                    cmd_status |= 0x00000003; // I/O + Memory Space Enable
+                    pci_write32(bus, dev, 0, 0x04, cmd_status);
+
+                    let bar0 = pci_read32(bus, dev, 0, 0x10) & 0xFFFFFFF0;
+                    let bar2 = pci_read32(bus, dev, 0, 0x18) & 0xFFFFFFF0;
+                    let cmd = (pci_read32(bus, dev, 0, 0x04) & 0xFFFF) as u16;
+                    return Some((bar0, bar2, cmd));
                 }
             }
         }
@@ -331,35 +486,27 @@ pub fn put_pixel(x: u32, y: u32, color: u32) {
     let fb = unsafe { &FB };
     if !fb.ready || x >= fb.width || y >= fb.height { return; }
 
-    let offset = y * fb.pitch + x * fb.bytes_per_pixel();
-    let ptr = (fb.addr + offset) as *mut u8;
-
-    unsafe {
-        match fb.bpp {
-            32 => {
-                *(ptr as *mut u32) = color;
-            }
-            24 => {
-                *ptr             = (color & 0xFF) as u8;
-                *ptr.add(1) = ((color >> 8) & 0xFF) as u8;
-                *ptr.add(2) = ((color >> 16) & 0xFF) as u8;
-            }
-            16 => {
-                // RGB565
-                let r = ((color >> 16) & 0xFF) >> 3;
-                let g = ((color >> 8)  & 0xFF) >> 2;
-                let b = (color & 0xFF) >> 3;
-                let px = ((r << 11) | (g << 5) | b) as u16;
-                *(ptr as *mut u16) = px;
-            }
-            _ => {}
+    if backbuffer_enabled() && can_use_backbuffer(fb) {
+        unsafe {
+            BACKBUFFER[backbuffer_index(x, y)] = color;
         }
+        return;
     }
+
+    put_pixel_hw(fb, x, y, color);
 }
 
 pub fn fill_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
-    for row in y..y+h {
-        for col in x..x+w {
+    let fb = unsafe { &FB };
+    if !fb.ready || w == 0 || h == 0 || x >= fb.width || y >= fb.height {
+        return;
+    }
+
+    let x_end = x.saturating_add(w).min(fb.width);
+    let y_end = y.saturating_add(h).min(fb.height);
+
+    for row in y..y_end {
+        for col in x..x_end {
             put_pixel(col, row, color);
         }
     }
@@ -367,15 +514,35 @@ pub fn fill_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
 
 pub fn fill_rect_fast(x: u32, y: u32, w: u32, h: u32, color: u32) {
     let fb = unsafe { &FB };
-    if !fb.ready { return; }
+    if !fb.ready || w == 0 || h == 0 || x >= fb.width || y >= fb.height { return; }
+
+    let x_end = x.saturating_add(w).min(fb.width);
+    let y_end = y.saturating_add(h).min(fb.height);
+    let draw_w = x_end.saturating_sub(x);
+    let draw_h = y_end.saturating_sub(y);
+    if draw_w == 0 || draw_h == 0 { return; }
+
+    if backbuffer_enabled() && can_use_backbuffer(fb) {
+        for row in y..y_end {
+            let row_start = backbuffer_index(x, row);
+            let row_end = row_start + draw_w as usize;
+            unsafe {
+                BACKBUFFER[row_start..row_end].fill(color);
+            }
+        }
+        return;
+    }
+
     let bpp = fb.bytes_per_pixel();
     if bpp == 4 {
-        // Быстрое заполнение через u32
-        for row in y..y+h {
-            let row_ptr = (fb.addr + row * fb.pitch + x * 4) as *mut u32;
-            unsafe {
-                for col in 0..w {
-                    *row_ptr.add(col as usize) = color;
+        // Для MMIO framebuffer безопаснее считать абсолютный адрес каждого пикселя,
+        // чем ходить `.add()` по "не-Rust" памяти.
+        for row in y..y_end {
+            let row_base = fb.addr + row * fb.pitch + x * 4;
+            for col in 0..draw_w {
+                let ptr = (row_base + col * 4) as *mut u32;
+                unsafe {
+                    core::ptr::write_volatile(ptr, color);
                 }
             }
         }
@@ -389,10 +556,15 @@ pub fn draw_hline(x: u32, y: u32, w: u32, color: u32) {
 }
 
 pub fn draw_vline(x: u32, y: u32, h: u32, color: u32) {
-    for row in y..y+h { put_pixel(x, row, color); }
+    let fb = unsafe { &FB };
+    if !fb.ready || h == 0 || x >= fb.width || y >= fb.height { return; }
+
+    let y_end = y.saturating_add(h).min(fb.height);
+    for row in y..y_end { put_pixel(x, row, color); }
 }
 
 pub fn draw_rect_outline(x: u32, y: u32, w: u32, h: u32, color: u32) {
+    if w == 0 || h == 0 { return; }
     draw_hline(x, y, w, color);
     draw_hline(x, y + h - 1, w, color);
     draw_vline(x, y, h, color);
