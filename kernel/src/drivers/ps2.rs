@@ -129,25 +129,58 @@ static mut ESC_BUFFER: [u8; 4] = [0; 4];
 static mut ESC_POS: usize = 0;
 static mut ESC_LEN: usize = 0;
 
+// Запрос переключения TTY (0 = нет, 1-6 = номер TTY)
+static mut TTY_SWITCH_REQUEST: u8 = 0;
+
+pub fn take_tty_switch() -> Option<u8> {
+    unsafe {
+        if TTY_SWITCH_REQUEST > 0 {
+            let n = TTY_SWITCH_REQUEST;
+            TTY_SWITCH_REQUEST = 0;
+            Some(n)
+        } else {
+            None
+        }
+    }
+}
+
+// Специальный байт для TTY switch (не печатаемый)
+pub const TTY_SWITCH_BYTE: u8 = 0x06; // Ctrl+F — не используется иначе
+
 /// Читает символ с клавиатуры (блокирующий)
 pub fn read_char() -> u8 {
     unsafe {
-        // Если есть символы в escape буфере, возвращаем их
         if ESC_POS < ESC_LEN {
             let c = ESC_BUFFER[ESC_POS];
             ESC_POS += 1;
-            if ESC_POS >= ESC_LEN {
-                ESC_POS = 0;
-                ESC_LEN = 0;
-            }
+            if ESC_POS >= ESC_LEN { ESC_POS = 0; ESC_LEN = 0; }
             return c;
         }
     }
 
     loop {
+        // Проверяем TTY switch запрос — возвращаем специальный байт
+        unsafe {
+            if TTY_SWITCH_REQUEST > 0 {
+                return TTY_SWITCH_BYTE;
+            }
+        }
+
         if let Some(sc) = poll_scancode() {
             if let Some(c) = scancode_to_char_enhanced(sc) {
+                // Если после обработки scancode появился TTY switch — вернём спецбайт
+                unsafe {
+                    if TTY_SWITCH_REQUEST > 0 {
+                        return TTY_SWITCH_BYTE;
+                    }
+                }
                 return c;
+            }
+            // Проверяем после каждого scancode
+            unsafe {
+                if TTY_SWITCH_REQUEST > 0 {
+                    return TTY_SWITCH_BYTE;
+                }
             }
         }
     }
@@ -217,6 +250,16 @@ fn scancode_to_char_enhanced(sc: u8) -> Option<u8> {
             0x0E => Some(b'\x08'), // Backspace
             0x0F => Some(b'\t'),   // Tab
             0x01 => Some(0x1B),    // Esc
+
+            // F1-F6: Ctrl+Alt+Fn = переключение TTY
+            0x3B..=0x40 => {
+                // F1=0x3B, F2=0x3C, F3=0x3D, F4=0x3E, F5=0x3F, F6=0x40
+                if CTRL && ALT {
+                    let tty = sc - 0x3A; // 1-6
+                    TTY_SWITCH_REQUEST = tty;
+                }
+                None
+            }
 
             // Стрелки (extended) — генерируем полные escape sequences
             _ if EXTENDED => {

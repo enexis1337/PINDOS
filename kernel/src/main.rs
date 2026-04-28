@@ -17,6 +17,7 @@ pub mod mell;
 pub mod dealduckd;
 pub mod version;
 pub mod bridgie;
+pub mod tty;
 
 use core::panic::PanicInfo;
 
@@ -130,11 +131,7 @@ pub extern "C" fn kernel_main(mb2_info: u32) -> ! {
         auth::drun();
     }
 
-    loop {
-        if auth::login() {
-            shell::run_as(auth::current_name(), auth::current_is_su());
-        }
-    }
+    tty::run();
 }
 
 #[panic_handler]

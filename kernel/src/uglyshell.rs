@@ -7,24 +7,34 @@ use crate::auth;
 pub const MAX_INPUT: usize = 256;
 
 pub fn run_as(username: &str, _is_su: bool) {
-    // Переключаемся на указанного пользователя
     auth::switch_user(username);
     
     let mut tick_counter = 0u32;
     
     loop {
-        print_prompt();
-        let input = read_line_no_prompt();
+        // Проверяем запрос переключения TTY перед каждым промптом
+        if let Some(n) = crate::drivers::ps2::take_tty_switch() {
+            crate::tty::switch_to(n as usize);
+            return;
+        }
+
+        // read_line сам печатает промпт (show_prompt=true)
+        let input = read_line();
         let cmd = input.as_str().trim();
+
+        if let Some(n) = crate::drivers::ps2::take_tty_switch() {
+            crate::tty::switch_to(n as usize);
+            return;
+        }
+
         if cmd == "logout" || cmd == "exit" {
             vga::print_colored("Logged out.\n", 0x08);
             return;
         }
         handle_command(cmd);
         
-        // Периодически вызываем планировщик задач
         tick_counter += 1;
-        if tick_counter % 10 == 0 { // Каждые 10 команд
+        if tick_counter % 10 == 0 {
             crate::dealduckd::tick();
         }
     }
@@ -228,25 +238,14 @@ fn cmd_help() {
     vga::print("  fatls, fatcat, fatcp          - FAT filesystem\n");
     vga::print("  run, exec                     - program execution\n");
     
-    vga::print_colored("\nKeyboard Shortcuts:\n", 0x0B);
-    vga::print("  Ctrl+C    - interrupt command\n");
-    vga::print("  Ctrl+D    - EOF / exit (if line empty)\n");
-    vga::print("  Ctrl+A    - beginning of line\n");
-    vga::print("  Ctrl+E    - end of line\n");
-    vga::print("  Ctrl+K    - kill to end of line\n");
-    vga::print("  Ctrl+U    - clear entire line\n");
-    vga::print("  Ctrl+L    - clear screen\n");
-    vga::print("  Up/Down   - command history\n");
-    vga::print("  Left/Right- cursor movement\n");
-    
     vga::print_colored("\nRedirection:\n", 0x0B);
     vga::print("  cmd > file    - redirect output to file\n");
     vga::print("  cmd >> file   - append output to file\n");
     
     vga::print_colored("\nSudo Examples:\n", 0x0B);
     vga::print("  sudo ls /root     - list root directory as root\n");
-    vga::print("  sudo useradd bob  - add user as root\n");
-    vga::print("  sudo rm /etc/file - delete system file as root\n");
+    vga::print("  sudo useradd [username]  - add user as root\n");
+    vga::print("  sudo rm [dir] - delete system file as root\n");
     
     vga::print_colored("\nType 'exit' or Ctrl+D to quit.\n", 0x08);
 }
@@ -751,7 +750,8 @@ struct LineEditor {
     history_pos: usize,
     saved_line: InputBuf,
     line_y: usize,
-    prompt_len: usize,  // длина промпта в символах
+    prompt_len: usize,
+    show_prompt: bool,
 }
 
 impl LineEditor {
@@ -763,6 +763,7 @@ impl LineEditor {
             saved_line: InputBuf::new(),
             line_y: 0,
             prompt_len: 0,
+            show_prompt: false,
         }
     }
 
@@ -878,30 +879,33 @@ impl LineEditor {
     }
 
     fn redraw_line(&self) {
-        self.redraw_line_with_prompt(true);
+        self.redraw_line_with_prompt(self.show_prompt);
     }
     
     fn redraw_line_no_prompt(&self) {
         self.redraw_line_with_prompt(false);
-    }
-    
+    }    
     fn redraw_line_with_prompt(&self, show_prompt: bool) {
         let start_y = self.line_y;
 
-        vga::set_cursor_pos(0, start_y);
-        for _ in 0..80 { vga::put_char(b' '); }
-        vga::set_cursor_pos(0, start_y);
-
         if show_prompt {
+            // Полная перерисовка строки с промптом
+            vga::set_cursor_pos(0, start_y);
+            for _ in 0..80 { vga::put_char(b' '); }
+            vga::set_cursor_pos(0, start_y);
             print_prompt();
+        } else {
+            // Только перерисовываем буфер после метки — метку не трогаем
+            vga::set_cursor_pos(self.prompt_len, start_y);
+            // Стираем только часть после метки
+            for _ in self.prompt_len..80 { vga::put_char(b' '); }
+            vga::set_cursor_pos(self.prompt_len, start_y);
         }
 
         for i in 0..self.buf.len {
             vga::put_char(self.buf.data[i]);
         }
 
-        // Курсор должен быть на позиции cursor в буфере, не в конце
-        // Вычисляем: начало строки + prompt_len + cursor
         let target_x = self.prompt_len + self.cursor;
         vga::set_cursor_pos(target_x % 80, start_y + target_x / 80);
     }
@@ -917,11 +921,11 @@ pub fn read_line_no_prompt() -> InputBuf {
 
 fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
     let mut editor = LineEditor::new();
+    editor.show_prompt = show_prompt;
 
     if show_prompt {
         print_prompt();
     }
-    // Берём позицию курсора ПОСЛЕ вывода промпта (или метки снаружи)
     let (x, y) = vga::get_cursor_pos();
     editor.line_y = y;
     editor.prompt_len = x;
@@ -930,6 +934,12 @@ fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
     loop {
         let c = vga::read_char();
         match c {
+            // TTY switch — немедленно выходим из ввода
+            crate::drivers::ps2::TTY_SWITCH_BYTE => {
+                vga::put_char(b'\n');
+                editor.buf.len = 0;
+                return editor.buf;
+            }
             b'\n' => {
                 vga::put_char(b'\n');
                 if show_prompt { editor.add_to_history(); }
@@ -953,43 +963,23 @@ fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
                 if editor.buf.len > 0 {
                     editor.buf.len -= 1;
                     editor.cursor = editor.cursor.saturating_sub(1);
-                    if show_prompt {
-                        editor.redraw_line();
-                    } else {
-                        vga::put_char(b'\x08');
-                        vga::put_char(b' ');
-                        vga::put_char(b'\x08');
-                        vga::sync_hw_cursor();
-                    }
+                    editor.redraw_line();
                 }
             }
             0x15 => {
-                // Ctrl+U — очистить строку
-                if show_prompt {
-                    editor.clear_line();
-                    editor.redraw_line();
-                } else {
-                    // Стираем все введённые символы
-                    for _ in 0..editor.buf.len {
-                        vga::put_char(b'\x08');
-                        vga::put_char(b' ');
-                        vga::put_char(b'\x08');
-                    }
-                    editor.buf.len = 0;
-                    editor.cursor = 0;
-                }
+                editor.clear_line();
+                editor.redraw_line();
             }
             0x0C => {
                 vga::clear_screen();
-                if show_prompt { editor.redraw_line(); }
+                editor.redraw_line();
             }
-            // Стрелки и Ctrl+A/E/K — только в шелле
-            0x01 => { if show_prompt { editor.move_home();   editor.redraw_line(); } }
-            0x05 => { if show_prompt { editor.move_end();    editor.redraw_line(); } }
-            0x0B => { if show_prompt { editor.kill_to_end(); editor.redraw_line(); } }
+            0x01 => { editor.move_home();   editor.redraw_line(); }
+            0x05 => { editor.move_end();    editor.redraw_line(); }
+            0x0B => { editor.kill_to_end(); editor.redraw_line(); }
             0x1B => {
                 let c2 = vga::read_char();
-                if c2 == b'[' && show_prompt {
+                if c2 == b'[' {
                     let c3 = vga::read_char();
                     match c3 {
                         b'A' => { editor.history_up();   editor.redraw_line(); }
@@ -1004,30 +994,15 @@ fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
                         }
                         _ => {}
                     }
-                } else if c2 == b'[' {
-                    // Поглощаем escape-последовательность без действия
-                    vga::read_char();
                 }
             }
             b'\t' => {
-                if show_prompt {
-                    vga::put_char(b' ');
-                    editor.insert_char(b' ');
-                }
+                editor.insert_char(b' ');
+                editor.redraw_line();
             }
             c if c >= 0x20 && c < 0x7F => {
-                if show_prompt {
-                    editor.insert_char(c);
-                    editor.redraw_line();
-                } else {
-                    vga::put_char(c);
-                    if editor.buf.len < MAX_INPUT - 1 {
-                        editor.buf.data[editor.buf.len] = c;
-                        editor.buf.len += 1;
-                        editor.cursor += 1;
-                    }
-                    vga::sync_hw_cursor();
-                }
+                editor.insert_char(c);
+                editor.redraw_line();
             }
             _ => {}
         }
