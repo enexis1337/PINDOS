@@ -17,9 +17,12 @@ const SYS_LINK:        u32 = 9;
 const SYS_UNLINK:      u32 = 10;
 const SYS_EXECVE:      u32 = 11;
 const SYS_CHDIR:       u32 = 12;
+const SYS_CHMOD:       u32 = 15;  // POSIX
+const SYS_CHOWN:       u32 = 16;  // POSIX (16-bit uid)
 const SYS_LSEEK:       u32 = 19;
 const SYS_GETPID:      u32 = 20;
 const SYS_GETUID:      u32 = 24;
+const SYS_SIGNAL:      u32 = 48;  // POSIX signal()
 const SYS_ACCESS:      u32 = 33;
 const SYS_KILL:        u32 = 37;
 const SYS_RENAME:      u32 = 38;
@@ -256,6 +259,22 @@ pub fn handle(regs: &mut SyscallRegs, state: &mut ProcessState) {
         SYS_TRUNCATE  => sys_truncate(read_cstring(ebx), ecx as usize),
         SYS_FTRUNCATE => sys_ftruncate(&state.fds, ebx as usize, ecx as usize),
         SYS_FCHMOD | SYS_FCHOWN => 0,
+        // POSIX chmod(path, mode) — у нас нет прав доступа, просто успех
+        SYS_CHMOD  => 0,
+        // POSIX chown(path, uid, gid) — у нас нет владельцев, просто успех
+        SYS_CHOWN  => 0,
+        // POSIX signal(signum, handler) — сохраняем адрес обработчика
+        SYS_SIGNAL => {
+            let signum = ebx as usize;
+            let handler = ecx;
+            if signum < 32 {
+                let old = state.sighandlers[signum];
+                state.sighandlers[signum] = handler;
+                old as i32
+            } else {
+                EINVAL
+            }
+        }
         SYS_LINK      => sys_link(read_cstring(ebx), read_cstring(ecx)),
         SYS_SYMLINK   => sys_link(read_cstring(ebx), read_cstring(ecx)),
         SYS_UNLINK    => if fs::delete(read_cstring(ebx)) { 0 } else { ENOENT },

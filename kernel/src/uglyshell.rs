@@ -145,7 +145,7 @@ fn dispatch(cmd: &str) {
         "exec"  => cmd_exec(args),
 
         // Алиасы
-        "exit" | "logout" => { vga::print("There's no escape from PINDOS.\n"); }
+        "exit" | "logout" => cmd_exit(args),
         "dir" => cmd_ls(args), // DOS alias
         "type" => cmd_cat(args), // DOS alias
         "copy" => cmd_cp(args), // DOS alias
@@ -157,6 +157,21 @@ fn dispatch(cmd: &str) {
         "which" => cmd_which(args),
         "file" => cmd_file(args),
         "id" => cmd_id(),
+
+        // POSIX обязательные встроенные команды
+        "export"  => cmd_export(args),
+        "unset"   => cmd_unset(args),
+        "set"     => cmd_set(args),
+        "test" | "[" => cmd_test(args),
+        "read"    => cmd_read_builtin(args),
+        "trap"    => cmd_trap(args),
+        "wait"    => cmd_wait(args),
+        "hash"    => cmd_hash(args),
+        "eval"    => cmd_eval(args),
+        "getopts" => cmd_getopts(args),
+        "true"    => {}           // POSIX: всегда успех
+        "false"   => {}           // POSIX: всегда неудача (exit code 1)
+        "colon" | ":" => {}       // POSIX: null command
 
         _ => {
             // Попробуем запустить как .com файл
@@ -505,14 +520,21 @@ fn cmd_ps() {
 }
 
 fn cmd_env() {
-    vga::print("PATH=/bin\n");
+    // Стандартные переменные
+    vga::print("PATH=/bin:/usr/bin\n");
     vga::print("HOME=/home\n");
-    vga::print("USER=root\n");
+    vga::print("USER="); vga::print(crate::auth::current_name()); vga::put_char(b'\n');
     vga::print("SHELL=/bin/sh\n");
-    vga::print("OS=PINDOS\n");
-    vga::print("PWD=");
-    vga::print(fs::cwd());
-    vga::put_char(b'\n');
+    vga::print("OS="); vga::print(crate::version::OS_FULL); vga::put_char(b'\n');
+    vga::print("PWD="); vga::print(fs::cwd()); vga::put_char(b'\n');
+    // Пользовательские переменные из export
+    unsafe {
+        for i in 0..ENV_COUNT {
+            let k = core::str::from_utf8(&ENV_KEYS[i][..ENV_LENS_K[i]]).unwrap_or("");
+            let v = core::str::from_utf8(&ENV_VALS[i][..ENV_LENS_V[i]]).unwrap_or("");
+            vga::print(k); vga::print("="); vga::print(v); vga::put_char(b'\n');
+        }
+    }
 }
 
 fn cmd_run(args: &str) {
@@ -1114,30 +1136,17 @@ fn cmd_play(args: &str) {
             vga::print(args);
             vga::print(" (press any key to stop)\n");
             let data = f.content_bytes();
-            let result = if args.ends_with(".mp3") || args.ends_with(".MP3") {
-                crate::drivers::speaker::play_mp3(data)
-            } else {
-                crate::drivers::speaker::play_wav(data)
-            };
+            let result = crate::drivers::speaker::play_wav(data);
             match result {
                 Ok(_) => vga::print("Done.\n"),
                 Err(crate::drivers::speaker::AudioError::NotWav) =>
                     vga::print("Error: not a WAV file\n"),
-                Err(crate::drivers::speaker::AudioError::NotMp3) =>
-                    vga::print("Error: not an MP3 file\n"),
-                Err(crate::drivers::speaker::AudioError::MissingFmt) =>
-                    vga::print("Error: broken WAV fmt chunk\n"),
-                Err(crate::drivers::speaker::AudioError::MissingData) =>
-                    vga::print("Error: WAV has no data chunk\n"),
                 Err(crate::drivers::speaker::AudioError::NotPcm) =>
                     vga::print("Error: only PCM WAV supported\n"),
-                Err(crate::drivers::speaker::AudioError::UnsupportedChannels) =>
-                    vga::print("Error: only mono/stereo audio supported\n"),
-                Err(crate::drivers::speaker::AudioError::UnsupportedBits) =>
-                    vga::print("Error: only 8-bit or 16-bit WAV supported\n"),
-                Err(crate::drivers::speaker::AudioError::NoAudioFrames) =>
-                    vga::print("Error: no playable audio frames found\n"),
-                Err(_) => vga::print("Error: cannot play file\n"),
+                Err(crate::drivers::speaker::AudioError::NotMono8) =>
+                    vga::print("Error: only 8-bit mono WAV supported\n"),
+                Err(crate::drivers::speaker::AudioError::TooSmall) =>
+                    vga::print("Error: file too small\n"),
             }
         }
         _ => { vga::print("File not found: "); vga::print(args); vga::put_char(b'\n'); }
@@ -1426,7 +1435,6 @@ fn cmd_id() {
 fn cmd_chmod(_args: &str) {
     vga::print("chmod: not implemented (PINDOS has no file permissions)\n");
 }
-
 fn cmd_chown(_args: &str) {
     vga::print("chown: not implemented (PINDOS has no file ownership)\n");
 }
@@ -1442,6 +1450,221 @@ fn cmd_printf(args: &str) {
 
 fn cmd_jobs() {
     vga::print("No active jobs\n");
+}
+
+// ── POSIX обязательные встроенные команды ─────────────────────────────────
+
+// Хранилище переменных окружения
+const ENV_MAX:     usize = 64;
+const ENV_KEY_MAX: usize = 32;
+const ENV_VAL_MAX: usize = 128;
+
+static mut ENV_KEYS:   [[u8; ENV_KEY_MAX]; ENV_MAX] = [[0; ENV_KEY_MAX]; ENV_MAX];
+static mut ENV_VALS:   [[u8; ENV_VAL_MAX]; ENV_MAX] = [[0; ENV_VAL_MAX]; ENV_MAX];
+static mut ENV_LENS_K: [usize; ENV_MAX] = [0; ENV_MAX];
+static mut ENV_LENS_V: [usize; ENV_MAX] = [0; ENV_MAX];
+static mut ENV_COUNT:  usize = 0;
+
+pub fn env_get(key: &str) -> Option<&'static str> {
+    unsafe {
+        for i in 0..ENV_COUNT {
+            let k = core::str::from_utf8(&ENV_KEYS[i][..ENV_LENS_K[i]]).unwrap_or("");
+            if k == key {
+                return core::str::from_utf8(&ENV_VALS[i][..ENV_LENS_V[i]]).ok();
+            }
+        }
+        None
+    }
+}
+
+pub fn env_set(key: &str, val: &str) {
+    unsafe {
+        for i in 0..ENV_COUNT {
+            let k = core::str::from_utf8(&ENV_KEYS[i][..ENV_LENS_K[i]]).unwrap_or("");
+            if k == key {
+                let vb = val.as_bytes();
+                let vl = vb.len().min(ENV_VAL_MAX);
+                ENV_VALS[i][..vl].copy_from_slice(&vb[..vl]);
+                ENV_LENS_V[i] = vl;
+                return;
+            }
+        }
+        if ENV_COUNT < ENV_MAX {
+            let kb = key.as_bytes();
+            let kl = kb.len().min(ENV_KEY_MAX);
+            ENV_KEYS[ENV_COUNT][..kl].copy_from_slice(&kb[..kl]);
+            ENV_LENS_K[ENV_COUNT] = kl;
+            let vb = val.as_bytes();
+            let vl = vb.len().min(ENV_VAL_MAX);
+            ENV_VALS[ENV_COUNT][..vl].copy_from_slice(&vb[..vl]);
+            ENV_LENS_V[ENV_COUNT] = vl;
+            ENV_COUNT += 1;
+        }
+    }
+}
+
+pub fn env_unset(key: &str) {
+    unsafe {
+        for i in 0..ENV_COUNT {
+            let k = core::str::from_utf8(&ENV_KEYS[i][..ENV_LENS_K[i]]).unwrap_or("");
+            if k == key {
+                for j in i..ENV_COUNT - 1 {
+                    ENV_KEYS[j] = ENV_KEYS[j + 1];
+                    ENV_VALS[j] = ENV_VALS[j + 1];
+                    ENV_LENS_K[j] = ENV_LENS_K[j + 1];
+                    ENV_LENS_V[j] = ENV_LENS_V[j + 1];
+                }
+                ENV_COUNT -= 1;
+                return;
+            }
+        }
+    }
+}
+
+// $? — exit code последней команды
+static mut LAST_EXIT_CODE: i32 = 0;
+pub fn set_last_exit(code: i32) { unsafe { LAST_EXIT_CODE = code; } }
+pub fn get_last_exit() -> i32   { unsafe { LAST_EXIT_CODE } }
+
+/// export [NAME[=VALUE]] — показать или установить переменную окружения
+fn cmd_export(args: &str) {
+    if args.is_empty() {
+        unsafe {
+            for i in 0..ENV_COUNT {
+                let k = core::str::from_utf8(&ENV_KEYS[i][..ENV_LENS_K[i]]).unwrap_or("");
+                let v = core::str::from_utf8(&ENV_VALS[i][..ENV_LENS_V[i]]).unwrap_or("");
+                vga::print("export "); vga::print(k);
+                vga::print("="); vga::print(v); vga::put_char(b'\n');
+            }
+        }
+        return;
+    }
+    if let Some(eq) = args.find('=') {
+        env_set(&args[..eq], &args[eq + 1..]);
+    } else {
+        env_set(args, "");
+    }
+}
+
+/// unset NAME — удалить переменную окружения
+fn cmd_unset(args: &str) {
+    if args.is_empty() { vga::print("Usage: unset NAME\n"); return; }
+    env_unset(args);
+}
+
+/// set — показать все переменные / установить опции шелла
+fn cmd_set(args: &str) {
+    if args.is_empty() {
+        unsafe {
+            for i in 0..ENV_COUNT {
+                let k = core::str::from_utf8(&ENV_KEYS[i][..ENV_LENS_K[i]]).unwrap_or("");
+                let v = core::str::from_utf8(&ENV_VALS[i][..ENV_LENS_V[i]]).unwrap_or("");
+                vga::print(k); vga::print("="); vga::print(v); vga::put_char(b'\n');
+            }
+        }
+        vga::print("?="); print_i32(get_last_exit()); vga::put_char(b'\n');
+        return;
+    }
+    // Опции -e, -x, -u и т.д. — принимаем молча
+}
+
+/// test EXPR / [ EXPR ] — вычислить условное выражение (POSIX)
+fn cmd_test(args: &str) {
+    let expr = args.trim_end_matches(']').trim();
+    let ok = eval_test_expr(expr);
+    set_last_exit(if ok { 0 } else { 1 });
+}
+
+fn eval_test_expr(expr: &str) -> bool {
+    let expr = expr.trim();
+    if expr.is_empty() { return false; }
+    // Унарные: -z -n -f -d -e -r -w -x
+    if let Some(r) = expr.strip_prefix("-z ") { return r.trim().is_empty(); }
+    if let Some(r) = expr.strip_prefix("-n ") { return !r.trim().is_empty(); }
+    if let Some(r) = expr.strip_prefix("-f ") {
+        return fs::get(r.trim()).map(|e| !e.is_dir()).unwrap_or(false);
+    }
+    if let Some(r) = expr.strip_prefix("-d ") {
+        return fs::get(r.trim()).map(|e| e.is_dir()).unwrap_or(false);
+    }
+    if let Some(r) = expr.strip_prefix("-e ") {
+        return fs::get(r.trim()).is_some() || r.trim() == "/";
+    }
+    if let Some(r) = expr.strip_prefix("-r ") { return fs::get(r.trim()).is_some(); }
+    if let Some(r) = expr.strip_prefix("-w ") { return fs::get(r.trim()).is_some(); }
+    if let Some(r) = expr.strip_prefix("-x ") { return fs::get(r.trim()).is_some(); }
+    // Бинарные: = != -eq -ne -lt -le -gt -ge
+    if let Some(p) = expr.find(" = ")  { return &expr[..p] == &expr[p+3..]; }
+    if let Some(p) = expr.find(" != ") { return &expr[..p] != &expr[p+4..]; }
+    if let Some(p) = expr.find(" -eq ") { return parse_i32(&expr[..p]) == parse_i32(&expr[p+5..]); }
+    if let Some(p) = expr.find(" -ne ") { return parse_i32(&expr[..p]) != parse_i32(&expr[p+5..]); }
+    if let Some(p) = expr.find(" -lt ") { return parse_i32(&expr[..p]) <  parse_i32(&expr[p+5..]); }
+    if let Some(p) = expr.find(" -le ") { return parse_i32(&expr[..p]) <= parse_i32(&expr[p+5..]); }
+    if let Some(p) = expr.find(" -gt ") { return parse_i32(&expr[..p]) >  parse_i32(&expr[p+5..]); }
+    if let Some(p) = expr.find(" -ge ") { return parse_i32(&expr[..p]) >= parse_i32(&expr[p+5..]); }
+    !expr.is_empty()
+}
+
+fn parse_i32(s: &str) -> i32 {
+    let s = s.trim();
+    let (neg, s) = if s.starts_with('-') { (true, &s[1..]) } else { (false, s) };
+    let mut n = 0i32;
+    for b in s.bytes() {
+        if b >= b'0' && b <= b'9' { n = n * 10 + (b - b'0') as i32; }
+    }
+    if neg { -n } else { n }
+}
+
+fn print_i32(n: i32) {
+    if n < 0 { vga::put_char(b'-'); print_usize((-n) as usize); }
+    else { print_usize(n as usize); }
+}
+
+/// read [-r] VAR — читать строку со stdin в переменную окружения
+fn cmd_read_builtin(args: &str) {
+    let varname = args.trim_start_matches("-r").trim();
+    if varname.is_empty() { vga::print("Usage: read VAR\n"); return; }
+    let line = read_line_no_prompt();
+    env_set(varname, line.as_str().trim());
+}
+
+/// trap [ACTION SIGNAL...] — установить обработчик сигнала (заглушка)
+fn cmd_trap(args: &str) {
+    if args.is_empty() {
+        vga::print("trap: no signals registered\n");
+    }
+    // Реальных сигналов в PINDOS нет — принимаем молча
+}
+
+/// wait [PID] — ждать завершения фонового процесса
+fn cmd_wait(_args: &str) {
+    // Нет фоновых процессов — сразу успех
+    set_last_exit(0);
+}
+
+/// hash [-r] [NAME] — кэш путей команд
+fn cmd_hash(args: &str) {
+    if args == "-r" || args.is_empty() { return; }
+    vga::print(args); vga::print(": shell builtin\n");
+}
+
+/// eval ARGS — выполнить строку как команду шелла
+fn cmd_eval(args: &str) {
+    if !args.is_empty() { handle_command(args); }
+}
+
+/// getopts OPTSTRING VAR — парсинг опций (минимальная реализация)
+fn cmd_getopts(args: &str) {
+    let (_, varname) = split_first(args);
+    if !varname.is_empty() { env_set(varname, "?"); }
+    set_last_exit(1);
+}
+
+/// exit [N] — завершить шелл с кодом N
+fn cmd_exit(args: &str) {
+    let code = if args.is_empty() { get_last_exit() } else { parse_i32(args) };
+    set_last_exit(code);
+    vga::print("logout\n");
 }
 
 fn cmd_kill(_args: &str) {
