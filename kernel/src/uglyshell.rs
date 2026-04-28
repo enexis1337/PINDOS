@@ -749,15 +749,18 @@ struct LineEditor {
     cursor: usize,
     history_pos: usize,
     saved_line: InputBuf,
+    line_y: usize,  // строка экрана где начинается ввод
 }
 
 impl LineEditor {
     fn new() -> Self {
+        let (_, y) = vga::get_cursor_pos();
         LineEditor {
             buf: InputBuf::new(),
             cursor: 0,
             history_pos: unsafe { HISTORY_COUNT },
             saved_line: InputBuf::new(),
+            line_y: y,
         }
     }
 
@@ -881,46 +884,32 @@ impl LineEditor {
     }
     
     fn redraw_line_with_prompt(&self, show_prompt: bool) {
-        // Сохраняем текущую позицию курсора
-        let (_, start_y) = vga::get_cursor_pos();
-        
-        // Перемещаемся в начало строки
+        let start_y = self.line_y;
+
+        // Перемещаемся в начало строки и очищаем её
         vga::set_cursor_pos(0, start_y);
-        
-        // Очищаем всю строку
-        for _ in 0..80 {
-            vga::put_char(b' ');
-        }
-        
-        // Возвращаемся в начало строки
+        for _ in 0..80 { vga::put_char(b' '); }
         vga::set_cursor_pos(0, start_y);
-        
+
         let prompt_len = if show_prompt {
-            // Выводим промпт
             print_prompt();
-            
-            // Вычисляем длину промпта (только видимые символы)
-            let user = crate::auth::current_name();
-            let cwd = crate::fs::cwd();
-            let suffix = if crate::auth::is_su() { "# " } else { "$ " };
-            user.len() + 8 + cwd.len() + suffix.len() // user@pindos:cwd$ 
+            let user     = crate::auth::current_name();
+            let hostname = crate::auth::get_hostname();
+            let cwd      = crate::fs::cwd();
+            let suffix   = if crate::auth::is_su() { "# " } else { "$ " };
+            user.len() + 1 + hostname.len() + 1 + cwd.len() + suffix.len()
         } else {
             0
         };
-        
-        // Выводим весь текст
+
+        // Выводим буфер
         for i in 0..self.buf.len {
             vga::put_char(self.buf.data[i]);
         }
-        
-        // Устанавливаем курсор в правильную позицию
-        let target_x = prompt_len + self.cursor;
-        // Убеждаемся, что не выходим за границы экрана
-        if target_x < 80 {
-            vga::set_cursor_pos(target_x, start_y);
-        } else {
-            vga::set_cursor_pos(79, start_y);
-        }
+
+        // Позиционируем курсор точно на текущий символ
+        let target_x = (prompt_len + self.cursor) % 80;
+        vga::set_cursor_pos(target_x, start_y);
     }
 }
 
@@ -934,140 +923,118 @@ pub fn read_line_no_prompt() -> InputBuf {
 
 fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
     let mut editor = LineEditor::new();
-    
+
     if show_prompt {
         print_prompt();
+        // Запоминаем строку ПОСЛЕ вывода промпта
+        let (_, y) = vga::get_cursor_pos();
+        editor.line_y = y;
     }
-    
+
     loop {
         let c = vga::read_char();
         match c {
-            // Enter
             b'\n' => {
                 vga::put_char(b'\n');
-                editor.add_to_history();
+                if show_prompt { editor.add_to_history(); }
                 return editor.buf;
             }
-            
-            // Ctrl+C - прерывание
             0x03 => {
                 vga::print_colored("^C\n", 0x0C);
                 editor.clear_line();
                 return editor.buf;
             }
-            
-            // Ctrl+D - EOF (если строка пустая - выход)
             0x04 => {
                 if editor.buf.len == 0 {
                     vga::print_colored("exit\n", 0x08);
-                    editor.buf.data[0] = b'e'; editor.buf.data[1] = b'x'; 
+                    editor.buf.data[0] = b'e'; editor.buf.data[1] = b'x';
                     editor.buf.data[2] = b'i'; editor.buf.data[3] = b't';
                     editor.buf.len = 4;
                     return editor.buf;
-                } else {
-                    editor.delete_forward();
-                    editor.redraw_line();
                 }
             }
-            
-            // Ctrl+A - начало строки
-            0x01 => {
-                editor.move_home();
-                editor.redraw_line();
-            }
-            
-            // Ctrl+E - конец строки
-            0x05 => {
-                editor.move_end();
-                editor.redraw_line();
-            }
-            
-            // Ctrl+K - удалить до конца строки
-            0x0B => {
-                editor.kill_to_end();
-                editor.redraw_line();
-            }
-            
-            // Ctrl+U - очистить всю строку
-            0x15 => {
-                editor.clear_line();
-                editor.redraw_line();
-            }
-            
-            // Ctrl+L - очистить экран
-            0x0C => {
-                vga::clear_screen();
-                editor.redraw_line();
-            }
-            
-            // Backspace
-            b'\x08' => {
-                editor.delete_char();
-                editor.redraw_line();
-            }
-            
-            // Delete (если поддерживается)
-            0x7F => {
-                editor.delete_forward();
-                editor.redraw_line();
-            }
-            
-            // Escape sequences (стрелки)
-            0x1B => {
-                let c2 = vga::read_char();
-                if c2 == b'[' {
-                    let c3 = vga::read_char();
-                    match c3 {
-                        b'A' => { // Up arrow
-                            editor.history_up();
-                            editor.redraw_line();
-                        }
-                        b'B' => { // Down arrow
-                            editor.history_down();
-                            editor.redraw_line();
-                        }
-                        b'C' => { // Right arrow
-                            editor.move_right();
-                            editor.redraw_line();
-                        }
-                        b'D' => { // Left arrow
-                            editor.move_left();
-                            editor.redraw_line();
-                        }
-                        b'H' => { // Home
-                            editor.move_home();
-                            editor.redraw_line();
-                        }
-                        b'F' => { // End
-                            editor.move_end();
-                            editor.redraw_line();
-                        }
-                        b'3' => { // Delete key (ESC[3~)
-                            let c4 = vga::read_char();
-                            if c4 == b'~' {
-                                editor.delete_forward();
-                                editor.redraw_line();
-                            }
-                        }
-                        _ => {} // Игнорируем неизвестные последовательности
+            b'\x08' | 0x7F => {
+                if editor.buf.len > 0 {
+                    editor.buf.len -= 1;
+                    editor.cursor = editor.cursor.saturating_sub(1);
+                    if show_prompt {
+                        // Полный redraw только в шелле
+                        editor.redraw_line();
+                    } else {
+                        // Простой backspace: стереть последний символ
+                        vga::put_char(b'\x08');
+                        vga::put_char(b' ');
+                        vga::put_char(b'\x08');
                     }
                 }
             }
-            
-            // Tab - автодополнение (пока заглушка)
+            0x15 => {
+                // Ctrl+U — очистить строку
+                if show_prompt {
+                    editor.clear_line();
+                    editor.redraw_line();
+                } else {
+                    // Стираем все введённые символы
+                    for _ in 0..editor.buf.len {
+                        vga::put_char(b'\x08');
+                        vga::put_char(b' ');
+                        vga::put_char(b'\x08');
+                    }
+                    editor.buf.len = 0;
+                    editor.cursor = 0;
+                }
+            }
+            0x0C => {
+                vga::clear_screen();
+                if show_prompt { editor.redraw_line(); }
+            }
+            // Стрелки и Ctrl+A/E/K — только в шелле
+            0x01 => { if show_prompt { editor.move_home();   editor.redraw_line(); } }
+            0x05 => { if show_prompt { editor.move_end();    editor.redraw_line(); } }
+            0x0B => { if show_prompt { editor.kill_to_end(); editor.redraw_line(); } }
+            0x1B => {
+                let c2 = vga::read_char();
+                if c2 == b'[' && show_prompt {
+                    let c3 = vga::read_char();
+                    match c3 {
+                        b'A' => { editor.history_up();   editor.redraw_line(); }
+                        b'B' => { editor.history_down(); editor.redraw_line(); }
+                        b'C' => { editor.move_right();   editor.redraw_line(); }
+                        b'D' => { editor.move_left();    editor.redraw_line(); }
+                        b'H' => { editor.move_home();    editor.redraw_line(); }
+                        b'F' => { editor.move_end();     editor.redraw_line(); }
+                        b'3' => {
+                            let c4 = vga::read_char();
+                            if c4 == b'~' { editor.delete_forward(); editor.redraw_line(); }
+                        }
+                        _ => {}
+                    }
+                } else if c2 == b'[' {
+                    // Поглощаем escape-последовательность без действия
+                    vga::read_char();
+                }
+            }
             b'\t' => {
-                // TODO: реализовать автодополнение команд и файлов
-                vga::put_char(b' '); // Пока просто пробел
-                editor.insert_char(b' ');
+                if show_prompt {
+                    vga::put_char(b' ');
+                    editor.insert_char(b' ');
+                }
             }
-            
-            // Обычные символы
             c if c >= 0x20 && c < 0x7F => {
-                editor.insert_char(c);
-                editor.redraw_line();
+                if show_prompt {
+                    editor.insert_char(c);
+                    editor.redraw_line();
+                } else {
+                    // Простой вывод символа
+                    vga::put_char(c);
+                    if editor.buf.len < MAX_INPUT - 1 {
+                        editor.buf.data[editor.buf.len] = c;
+                        editor.buf.len += 1;
+                        editor.cursor += 1;
+                    }
+                }
             }
-            
-            _ => {} // Игнорируем остальные управляющие символы
+            _ => {}
         }
     }
 }

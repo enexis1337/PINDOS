@@ -213,7 +213,6 @@ pub fn put_char(c: u8) {
                 CURSOR_X = 0;
             }
             b'\x08' => {
-                // backspace
                 if CURSOR_X > 0 {
                     CURSOR_X -= 1;
                     write_cell(CURSOR_X, CURSOR_Y, b' ', DEFAULT_COLOR);
@@ -234,6 +233,19 @@ pub fn put_char(c: u8) {
             scroll();
             CURSOR_Y = VGA_HEIGHT - 1;
         }
+
+        update_hw_cursor(CURSOR_X, CURSOR_Y);
+    }
+}
+
+/// Обновить аппаратный VGA курсор
+fn update_hw_cursor(x: usize, y: usize) {
+    let pos = y * VGA_WIDTH + x;
+    unsafe {
+        core::arch::asm!("out dx, al", in("dx") 0x3D4u16, in("al") 0x0Fu8);
+        core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos & 0xFF) as u8);
+        core::arch::asm!("out dx, al", in("dx") 0x3D4u16, in("al") 0x0Eu8);
+        core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") ((pos >> 8) & 0xFF) as u8);
     }
 }
 
@@ -313,6 +325,7 @@ pub fn set_cursor_pos(x: usize, y: usize) {
     unsafe {
         CURSOR_X = if x >= VGA_WIDTH { VGA_WIDTH - 1 } else { x };
         CURSOR_Y = if y >= VGA_HEIGHT { VGA_HEIGHT - 1 } else { y };
+        update_hw_cursor(CURSOR_X, CURSOR_Y);
     }
 }
 

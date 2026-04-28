@@ -208,15 +208,15 @@ pub fn drun() {
     vga::print_colored(crate::version::OS_FULL, 0x0E);
     vga::print_colored("]=============\n", 0x0E);
     print_divider();
-    vga::print_colored("           First dRun Setup\n", 0x0F);
+    vga::print_colored("           First Drun Setup\n", 0x0F);
     print_divider();
     vga::put_char(b'\n');
 
     // Hostname
-    print_divider();
-    vga::print_colored("        System hostname\n", 0x0F);
-    print_divider();
-    vga::print_colored("Hostname [pindos]: ", 0x0B);
+    // print_divider();
+    // vga::print_colored("        System hostname\n", 0x0F);
+    // print_divider();
+    vga::print_colored("Hostname [enter=pindos]: ", 0x0B);
     let hn_input = crate::uglyshell::read_line_no_prompt();
     let hn = hn_input.as_str().trim();
     if !hn.is_empty() {
@@ -247,9 +247,9 @@ pub fn drun() {
     vga::put_char(b'\n');
 
     // Новый пользователь
-    print_divider();
-    vga::print_colored("        Create a new user\n", 0x0F);
-    print_divider();
+    // print_divider();
+    // vga::print_colored("        Create a new user\n", 0x0F);
+    // print_divider();
     vga::print_colored("Username: ", 0x0B);
     let username = crate::uglyshell::read_line_no_prompt();
     let username = username.as_str().trim();
@@ -285,7 +285,7 @@ pub fn drun() {
     unsafe { FIRST_RUN = false; }
     vga::put_char(b'\n');
     print_divider();
-    vga::print_colored("  Setup complete. Press any key to login...\n", 0x0E);
+    vga::print_colored(" Setup complete. Press any key to login...\n", 0x0E);
     print_divider();
     vga::read_char();
 }
