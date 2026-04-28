@@ -42,20 +42,23 @@ pub fn run() {
 
     // Заголовок
     vga::print_colored(user, 0x0E);
-    vga::print_colored("@pindos\n", 0x0E);
-    // Подчёркивание длиной user + "@pindos"
-    let sep_len = auth::current_name().len() + 7;
+    vga::print_colored("@", 0x0E);
+    vga::print_colored(crate::auth::get_hostname(), 0x0E);
+    vga::put_char(b'\n');
+    // Подчёркивание
+    let sep_len = auth::current_name().len() + 1 + crate::auth::get_hostname().len();
     for _ in 0..sep_len { vga::print_colored("-", 0x08); }
     vga::put_char(b'\n');
 
     // Подготавливаем информационные строки
     let info_lines = [
-        ("OS", os),
-        ("Kernel", kernel),
-        ("Shell", shell),
-        ("Arch", arch),
-        ("CPU", cpu),
-        ("Memory", mem),
+        ("OS",       os),
+        ("Kernel",   kernel),
+        ("Host",     crate::auth::get_hostname()),
+        ("Shell",    shell),
+        ("Arch",     arch),
+        ("CPU",      cpu),
+        ("Memory",   mem),
     ];
 
     // Выводим лого и информацию параллельно

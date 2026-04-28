@@ -32,7 +32,9 @@ pub fn run_as(username: &str, _is_su: bool) {
 
 fn print_prompt() {
     vga::print_colored(crate::auth::current_name(), 0x0A);
-    vga::print_colored("@pindos:", 0x0A);
+    vga::print_colored("@", 0x0A);
+    vga::print_colored(crate::auth::get_hostname(), 0x0A);
+    vga::print_colored(":", 0x0A);
     vga::print_colored(fs::cwd(), 0x0B);
     if crate::auth::is_su() {
         vga::print_colored("# ", 0x0C);
@@ -143,6 +145,9 @@ fn dispatch(cmd: &str) {
         }
         "run"   => cmd_run(args),
         "exec"  => cmd_exec(args),
+
+        // Пакетный менеджер
+        "bridgie" | "pkg" => crate::bridgie::run(args),
 
         // Алиасы
         "exit" | "logout" => cmd_exit(args),
@@ -484,7 +489,9 @@ fn cmd_find(args: &str) {
 fn cmd_uname(args: &str) {
     if args.contains('a') || args == "-a" {
         vga::print(crate::version::OS_NAME);
-        vga::print(" pindos ");
+        vga::print(" ");
+        vga::print(crate::auth::get_hostname());
+        vga::print(" ");
         vga::print(crate::version::OS_VERSION);
         vga::print(" #1 i686 ");
         vga::print(crate::version::OS_NAME);
@@ -1087,6 +1094,8 @@ fn split_first(s: &str) -> (&str, &str) {
         None    => (s, ""),
     }
 }
+
+pub fn split_first_pub(s: &str) -> (&str, &str) { split_first(s) }
 
 pub fn print_usize(n: usize) {
     if n == 0 { vga::put_char(b'0'); return; }

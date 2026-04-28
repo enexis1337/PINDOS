@@ -43,6 +43,24 @@ static mut LOGGED_IN: bool = false;
 // Флаг первого запуска
 static mut FIRST_RUN: bool = true;
 
+// Hostname системы
+const MAX_HOSTNAME: usize = 64;
+static mut HOSTNAME: [u8; MAX_HOSTNAME] = *b"pindos\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static mut HOSTNAME_LEN: usize = 6;
+
+pub fn get_hostname() -> &'static str {
+    unsafe { core::str::from_utf8(&HOSTNAME[..HOSTNAME_LEN]).unwrap_or("pindos") }
+}
+
+pub fn set_hostname(name: &str) {
+    unsafe {
+        let b = name.as_bytes();
+        let l = b.len().min(MAX_HOSTNAME);
+        HOSTNAME[..l].copy_from_slice(&b[..l]);
+        HOSTNAME_LEN = l;
+    }
+}
+
 pub fn is_first_run() -> bool { unsafe { FIRST_RUN } }
 
 pub fn current_user() -> &'static User {
@@ -192,6 +210,23 @@ pub fn drun() {
     print_divider();
     vga::print_colored("           First dRun Setup\n", 0x0F);
     print_divider();
+    vga::put_char(b'\n');
+
+    // Hostname
+    print_divider();
+    vga::print_colored("        System hostname\n", 0x0F);
+    print_divider();
+    vga::print_colored("Hostname [pindos]: ", 0x0B);
+    let hn_input = crate::uglyshell::read_line_no_prompt();
+    let hn = hn_input.as_str().trim();
+    if !hn.is_empty() {
+        set_hostname(hn);
+        vga::print_colored("[+] Hostname set to '", 0x0A);
+        vga::print_colored(hn, 0x0E);
+        vga::print_colored("'\n", 0x0A);
+    } else {
+        vga::print_colored("[+] Hostname: pindos (default)\n", 0x08);
+    }
     vga::put_char(b'\n');
 
     // Root пароль

@@ -16,6 +16,7 @@ pub mod linux;
 pub mod mell;
 pub mod dealduckd;
 pub mod version;
+pub mod bridgie;
 
 use core::panic::PanicInfo;
 
@@ -117,6 +118,8 @@ pub extern "C" fn kernel_main(mb2_info: u32) -> ! {
 
     // Инициализируем планировщик задач
     dealduckd::init();
+    // Инициализируем пакетный менеджер
+    bridgie::registry::init();
 
     vga::print_colored("PINDOS ready.\n", 0x0A);
 
