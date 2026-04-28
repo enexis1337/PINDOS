@@ -1,6 +1,8 @@
 // VGA text mode 80x25, буфер по адресу 0xB8000
 
 const VGA_BUFFER: *mut u8 = 0xB8000 as *mut u8;
+const VGA_CELL_W: u32 = 8;
+const VGA_CELL_H: u32 = 16;
 
 // ── Capture буфер — перехват вывода для Burmalda ──────────────────────────
 const CAPTURE_BUF_SIZE: usize = 8192;
@@ -64,6 +66,32 @@ pub fn serial_print(s: &str) {
         serial_putc(b);
     }
 }
+
+pub fn serial_print_u32(mut n: u32) {
+    if n == 0 {
+        serial_putc(b'0');
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut i = 0usize;
+    while n > 0 {
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        serial_putc(buf[i]);
+    }
+}
+
+pub fn serial_print_hex_u32(n: u32) {
+    serial_print("0x");
+    for i in (0..8).rev() {
+        let nibble = ((n >> (i * 4)) & 0xF) as u8;
+        serial_putc(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 });
+    }
+}
 const VGA_WIDTH: usize = 80;
 const VGA_HEIGHT: usize = 25;
 const DEFAULT_COLOR: u8 = 0x0F; // белый на чёрном
@@ -71,12 +99,101 @@ const DEFAULT_COLOR: u8 = 0x0F; // белый на чёрном
 static mut CURSOR_X: usize = 0;
 static mut CURSOR_Y: usize = 0;
 
-pub fn clear_screen() {
-    for i in 0..VGA_WIDTH * VGA_HEIGHT {
-        unsafe {
-            *VGA_BUFFER.add(i * 2) = b' ';
-            *VGA_BUFFER.add(i * 2 + 1) = DEFAULT_COLOR;
+fn framebuffer_console_active() -> bool {
+    let fb = crate::drivers::vesa::get();
+    fb.ready && fb.active
+}
+
+fn vga_color_to_rgb(color: u8) -> u32 {
+    match color {
+        0x0 => 0x000000,
+        0x1 => 0x0000AA,
+        0x2 => 0x00AA00,
+        0x3 => 0x00AAAA,
+        0x4 => 0xAA0000,
+        0x5 => 0xAA00AA,
+        0x6 => 0xAA5500,
+        0x7 => 0xAAAAAA,
+        0x8 => 0x555555,
+        0x9 => 0x5555FF,
+        0xA => 0x55FF55,
+        0xB => 0x55FFFF,
+        0xC => 0xFF5555,
+        0xD => 0xFF55FF,
+        0xE => 0xFFFF55,
+        _ => 0xFFFFFF,
+    }
+}
+
+fn draw_fb_cell(x: usize, y: usize, c: u8, color: u8) {
+    let fg = vga_color_to_rgb(color & 0x0F);
+    let bg = vga_color_to_rgb((color >> 4) & 0x0F);
+    crate::drivers::vesa::draw_char(
+        (x as u32) * VGA_CELL_W,
+        (y as u32) * VGA_CELL_H,
+        c,
+        fg,
+        bg,
+    );
+}
+
+fn clear_fb_screen() {
+    let bg = vga_color_to_rgb((DEFAULT_COLOR >> 4) & 0x0F);
+    crate::drivers::vesa::clear(bg);
+}
+
+fn scroll_fb() {
+    let bg = vga_color_to_rgb((DEFAULT_COLOR >> 4) & 0x0F);
+    for row in 1..VGA_HEIGHT {
+        for col in 0..VGA_WIDTH {
+            let src = (row * VGA_WIDTH + col) * 2;
+            let ch = unsafe { *VGA_BUFFER.add(src) };
+            let color = unsafe { *VGA_BUFFER.add(src + 1) };
+            draw_fb_cell(col, row - 1, ch, color);
         }
+    }
+    for col in 0..VGA_WIDTH {
+        draw_fb_cell(col, VGA_HEIGHT - 1, b' ', DEFAULT_COLOR);
+    }
+    crate::drivers::vesa::fill_rect_fast(
+        0,
+        ((VGA_HEIGHT - 1) as u32) * VGA_CELL_H,
+        (VGA_WIDTH as u32) * VGA_CELL_W,
+        VGA_CELL_H,
+        bg,
+    );
+}
+
+fn write_cell(x: usize, y: usize, c: u8, color: u8) {
+    let offset = (y * VGA_WIDTH + x) * 2;
+    unsafe {
+        *VGA_BUFFER.add(offset) = c;
+        *VGA_BUFFER.add(offset + 1) = color;
+    }
+    if framebuffer_console_active() {
+        draw_fb_cell(x, y, c, color);
+    }
+}
+
+pub fn clear_screen() {
+    unsafe {
+        if CAPTURE_ACTIVE {
+            capture_push(0x1B);
+            capture_push(b'[');
+            capture_push(b'2');
+            capture_push(b'J');
+            capture_push(0x1B);
+            capture_push(b'[');
+            capture_push(b'H');
+        }
+    }
+    for y in 0..VGA_HEIGHT {
+        for x in 0..VGA_WIDTH {
+            write_cell(x, y, b' ', DEFAULT_COLOR);
+        }
+    }
+    if framebuffer_console_active() {
+        clear_fb_screen();
     }
     unsafe {
         CURSOR_X = 0;
@@ -99,15 +216,11 @@ pub fn put_char(c: u8) {
                 // backspace
                 if CURSOR_X > 0 {
                     CURSOR_X -= 1;
-                    let offset = (CURSOR_Y * VGA_WIDTH + CURSOR_X) * 2;
-                    *VGA_BUFFER.add(offset) = b' ';
-                    *VGA_BUFFER.add(offset + 1) = DEFAULT_COLOR;
+                    write_cell(CURSOR_X, CURSOR_Y, b' ', DEFAULT_COLOR);
                 }
             }
             _ => {
-                let offset = (CURSOR_Y * VGA_WIDTH + CURSOR_X) * 2;
-                *VGA_BUFFER.add(offset) = c;
-                *VGA_BUFFER.add(offset + 1) = DEFAULT_COLOR;
+                write_cell(CURSOR_X, CURSOR_Y, c, DEFAULT_COLOR);
                 CURSOR_X += 1;
             }
         }
@@ -145,18 +258,15 @@ pub fn print_colored(s: &str, color: u8) {
                     CURSOR_X = 0;
                 }
                 b'\x08' => {
-                    // backspace
-                    if CURSOR_X > 0 {
-                        CURSOR_X -= 1;
-                        let offset = (CURSOR_Y * VGA_WIDTH + CURSOR_X) * 2;
-                        *VGA_BUFFER.add(offset) = b' ';
-                        *VGA_BUFFER.add(offset + 1) = color;
-                    }
+                // backspace
+                if CURSOR_X > 0 {
+                    CURSOR_X -= 1;
+                    let erase_color = (color & 0xF0) | (DEFAULT_COLOR & 0x0F);
+                    write_cell(CURSOR_X, CURSOR_Y, b' ', erase_color);
                 }
+            }
                 _ => {
-                    let offset = (CURSOR_Y * VGA_WIDTH + CURSOR_X) * 2;
-                    *VGA_BUFFER.add(offset) = b;
-                    *VGA_BUFFER.add(offset + 1) = color;
+                    write_cell(CURSOR_X, CURSOR_Y, b, color);
                     CURSOR_X += 1;
                 }
             }
@@ -176,7 +286,6 @@ pub fn print_colored(s: &str, color: u8) {
 
 fn scroll() {
     unsafe {
-        // Сдвигаем все строки вверх
         for row in 1..VGA_HEIGHT {
             for col in 0..VGA_WIDTH {
                 let src = (row * VGA_WIDTH + col) * 2;
@@ -185,12 +294,14 @@ fn scroll() {
                 *VGA_BUFFER.add(dst + 1) = *VGA_BUFFER.add(src + 1);
             }
         }
-        // Очищаем последнюю строку
         for col in 0..VGA_WIDTH {
             let offset = ((VGA_HEIGHT - 1) * VGA_WIDTH + col) * 2;
             *VGA_BUFFER.add(offset) = b' ';
             *VGA_BUFFER.add(offset + 1) = DEFAULT_COLOR;
         }
+    }
+    if framebuffer_console_active() {
+        scroll_fb();
     }
 }
 
@@ -209,5 +320,3 @@ pub fn set_cursor_pos(x: usize, y: usize) {
 pub fn read_char() -> u8 {
     crate::drivers::ps2::read_char()
 }
-
-

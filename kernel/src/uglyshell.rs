@@ -58,9 +58,9 @@ fn handle_command(cmd: &str) {
         let (left, right) = (&cmd[..pos], cmd[pos+3..].trim());
         let out = capture_output(left);
         if fs::get(right).is_some() {
-            fs::write(right, out.as_str());
+            fs::write(right, out);
         } else {
-            fs::create(right, out.as_str());
+            fs::create(right, out);
         }
         return;
     }
@@ -68,7 +68,7 @@ fn handle_command(cmd: &str) {
         let (left, right) = (&cmd[..pos], cmd[pos+4..].trim());
         let out = capture_output(left);
         if fs::get(right).is_none() { fs::create(right, ""); }
-        fs::append(right, out.as_str());
+        fs::append(right, out);
         return;
     }
 
@@ -687,21 +687,16 @@ fn user_can_sudo(username: &str) -> bool {
     }
 }
 
-fn capture_output(cmd: &str) -> InputBuf {
+fn capture_output(cmd: &str) -> &'static str {
     capture_command(cmd)
 }
 
 /// Публичная функция для Burmalda — выполняет команду и возвращает вывод
-pub fn capture_command(cmd: &str) -> InputBuf {
+pub fn capture_command(cmd: &str) -> &'static str {
     // Включаем перехват вывода
     crate::vga::capture_start();
     dispatch(cmd);
-    let output = crate::vga::capture_end();
-
-    // Копируем в InputBuf
-    let mut buf = InputBuf::new();
-    for b in output.bytes() { buf.push(b); }
-    buf
+    crate::vga::capture_end()
 }
 
 // ── Утилиты ───────────────────────────────────────────────────────────────
