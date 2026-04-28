@@ -1104,8 +1104,8 @@ fn cmd_time() {
 
 fn cmd_play(args: &str) {
     if args.is_empty() {
-        vga::print("Usage: play <file.wav>\n");
-        vga::print("  Plays WAV file through PC speaker (8-bit mono PCM only)\n");
+        vga::print("Usage: play <file.wav|file.mp3>\n");
+        vga::print("  Plays WAV/MP3 through PC speaker\n");
         return;
     }
     match fs::get(args) {
@@ -1113,15 +1113,30 @@ fn cmd_play(args: &str) {
             vga::print("Playing: ");
             vga::print(args);
             vga::print(" (press any key to stop)\n");
-            let data = f.content_str().as_bytes();
-            match crate::drivers::speaker::play_wav(data) {
+            let data = f.content_bytes();
+            let result = if args.ends_with(".mp3") || args.ends_with(".MP3") {
+                crate::drivers::speaker::play_mp3(data)
+            } else {
+                crate::drivers::speaker::play_wav(data)
+            };
+            match result {
                 Ok(_) => vga::print("Done.\n"),
                 Err(crate::drivers::speaker::AudioError::NotWav) =>
                     vga::print("Error: not a WAV file\n"),
+                Err(crate::drivers::speaker::AudioError::NotMp3) =>
+                    vga::print("Error: not an MP3 file\n"),
+                Err(crate::drivers::speaker::AudioError::MissingFmt) =>
+                    vga::print("Error: broken WAV fmt chunk\n"),
+                Err(crate::drivers::speaker::AudioError::MissingData) =>
+                    vga::print("Error: WAV has no data chunk\n"),
                 Err(crate::drivers::speaker::AudioError::NotPcm) =>
                     vga::print("Error: only PCM WAV supported\n"),
-                Err(crate::drivers::speaker::AudioError::NotMono8) =>
-                    vga::print("Error: only 8-bit mono WAV supported\n"),
+                Err(crate::drivers::speaker::AudioError::UnsupportedChannels) =>
+                    vga::print("Error: only mono/stereo audio supported\n"),
+                Err(crate::drivers::speaker::AudioError::UnsupportedBits) =>
+                    vga::print("Error: only 8-bit or 16-bit WAV supported\n"),
+                Err(crate::drivers::speaker::AudioError::NoAudioFrames) =>
+                    vga::print("Error: no playable audio frames found\n"),
                 Err(_) => vga::print("Error: cannot play file\n"),
             }
         }
@@ -1139,7 +1154,7 @@ fn cmd_view(args: &str) {
             // Создаём временное окно для отображения
             let win = crate::mell::vga_gui::Window::new(2, 1, 76, 22, "Image Viewer");
             win.draw();
-            let data = f.content_str().as_bytes();
+            let data = f.content_bytes();
             match crate::drivers::png::render_png_ascii(data, &win) {
                 Ok(_) => {
                     crate::mell::vga_gui::put_str_at(2, 23,
@@ -1483,3 +1498,4 @@ fn cmd_history() {
         }
     }
 }
+
