@@ -1,6 +1,7 @@
-# PINDOS
-Unix-подобная операционная система для архитектуры x86 (32-bit protected mode).  
-Написана на ассемблере (NASM) и Rust (`no_std`).
+<img src="logos/minimized.png" width="450">
+
+## Unix-подобная операционная система для архитектуры x86 (32-bit protected mode). Написана на ассемблере (NASM) и Rust (`no_std`).
+
 ![Screenshot](logos/screenshot.png)
 
 ---
