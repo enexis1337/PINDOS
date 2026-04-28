@@ -217,6 +217,7 @@ pub fn drun() {
     // vga::print_colored("        System hostname\n", 0x0F);
     // print_divider();
     vga::print_colored("Hostname [enter=pindos]: ", 0x0B);
+    vga::sync_hw_cursor();
     let hn_input = crate::uglyshell::read_line_no_prompt();
     let hn = hn_input.as_str().trim();
     if !hn.is_empty() {
@@ -251,6 +252,7 @@ pub fn drun() {
     // vga::print_colored("        Create a new user\n", 0x0F);
     // print_divider();
     vga::print_colored("Username: ", 0x0B);
+    vga::sync_hw_cursor();
     let username = crate::uglyshell::read_line_no_prompt();
     let username = username.as_str().trim();
 
@@ -314,6 +316,7 @@ pub fn login() -> bool {
             vga::put_char(b'\n');
         }
         vga::print_colored("login:    ", 0x0B);
+        vga::sync_hw_cursor();
         let username = crate::uglyshell::read_line_no_prompt();
         let username = username.as_str().trim();
 

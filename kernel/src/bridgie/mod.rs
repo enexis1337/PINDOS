@@ -29,7 +29,7 @@ pub fn run(args: &str) {
         "version" | "-v"  => {
             crate::vga::print("Bridgie ");
             crate::vga::print(BRIDGIE_VERSION);
-            crate::vga::print(" — PINDOS package manager\n");
+            crate::vga::print(" - PINDOS package manager\n");
         }
         "help" | "" => print_help(),
         _ => {

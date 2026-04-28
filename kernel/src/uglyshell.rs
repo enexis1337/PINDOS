@@ -41,6 +41,7 @@ fn print_prompt() {
     } else {
         vga::print_colored("$ ", 0x0F);
     }
+    vga::sync_hw_cursor();
 }
 
 // Обратная совместимость (не используется, но нужна для линковки)
@@ -749,18 +750,19 @@ struct LineEditor {
     cursor: usize,
     history_pos: usize,
     saved_line: InputBuf,
-    line_y: usize,  // строка экрана где начинается ввод
+    line_y: usize,
+    prompt_len: usize,  // длина промпта в символах
 }
 
 impl LineEditor {
     fn new() -> Self {
-        let (_, y) = vga::get_cursor_pos();
         LineEditor {
             buf: InputBuf::new(),
             cursor: 0,
             history_pos: unsafe { HISTORY_COUNT },
             saved_line: InputBuf::new(),
-            line_y: y,
+            line_y: 0,
+            prompt_len: 0,
         }
     }
 
@@ -886,30 +888,22 @@ impl LineEditor {
     fn redraw_line_with_prompt(&self, show_prompt: bool) {
         let start_y = self.line_y;
 
-        // Перемещаемся в начало строки и очищаем её
         vga::set_cursor_pos(0, start_y);
         for _ in 0..80 { vga::put_char(b' '); }
         vga::set_cursor_pos(0, start_y);
 
-        let prompt_len = if show_prompt {
+        if show_prompt {
             print_prompt();
-            let user     = crate::auth::current_name();
-            let hostname = crate::auth::get_hostname();
-            let cwd      = crate::fs::cwd();
-            let suffix   = if crate::auth::is_su() { "# " } else { "$ " };
-            user.len() + 1 + hostname.len() + 1 + cwd.len() + suffix.len()
-        } else {
-            0
-        };
+        }
 
-        // Выводим буфер
         for i in 0..self.buf.len {
             vga::put_char(self.buf.data[i]);
         }
 
-        // Позиционируем курсор точно на текущий символ
-        let target_x = (prompt_len + self.cursor) % 80;
-        vga::set_cursor_pos(target_x, start_y);
+        // Курсор должен быть на позиции cursor в буфере, не в конце
+        // Вычисляем: начало строки + prompt_len + cursor
+        let target_x = self.prompt_len + self.cursor;
+        vga::set_cursor_pos(target_x % 80, start_y + target_x / 80);
     }
 }
 
@@ -926,10 +920,12 @@ fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
 
     if show_prompt {
         print_prompt();
-        // Запоминаем строку ПОСЛЕ вывода промпта
-        let (_, y) = vga::get_cursor_pos();
-        editor.line_y = y;
     }
+    // Берём позицию курсора ПОСЛЕ вывода промпта (или метки снаружи)
+    let (x, y) = vga::get_cursor_pos();
+    editor.line_y = y;
+    editor.prompt_len = x;
+    vga::sync_hw_cursor();
 
     loop {
         let c = vga::read_char();
@@ -958,13 +954,12 @@ fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
                     editor.buf.len -= 1;
                     editor.cursor = editor.cursor.saturating_sub(1);
                     if show_prompt {
-                        // Полный redraw только в шелле
                         editor.redraw_line();
                     } else {
-                        // Простой backspace: стереть последний символ
                         vga::put_char(b'\x08');
                         vga::put_char(b' ');
                         vga::put_char(b'\x08');
+                        vga::sync_hw_cursor();
                     }
                 }
             }
@@ -1025,13 +1020,13 @@ fn read_line_with_prompt(show_prompt: bool) -> InputBuf {
                     editor.insert_char(c);
                     editor.redraw_line();
                 } else {
-                    // Простой вывод символа
                     vga::put_char(c);
                     if editor.buf.len < MAX_INPUT - 1 {
                         editor.buf.data[editor.buf.len] = c;
                         editor.buf.len += 1;
                         editor.cursor += 1;
                     }
+                    vga::sync_hw_cursor();
                 }
             }
             _ => {}

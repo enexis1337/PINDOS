@@ -233,8 +233,7 @@ pub fn put_char(c: u8) {
             scroll();
             CURSOR_Y = VGA_HEIGHT - 1;
         }
-
-        update_hw_cursor(CURSOR_X, CURSOR_Y);
+        // НЕ вызываем update_hw_cursor здесь — только через set_cursor_pos
     }
 }
 
@@ -327,6 +326,11 @@ pub fn set_cursor_pos(x: usize, y: usize) {
         CURSOR_Y = if y >= VGA_HEIGHT { VGA_HEIGHT - 1 } else { y };
         update_hw_cursor(CURSOR_X, CURSOR_Y);
     }
+}
+
+/// Синхронизировать аппаратный курсор с текущей программной позицией
+pub fn sync_hw_cursor() {
+    unsafe { update_hw_cursor(CURSOR_X, CURSOR_Y); }
 }
 
 // Читаем символ с клавиатуры через PS/2 драйвер
