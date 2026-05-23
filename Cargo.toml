@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "kernel",
+    "crates/ipc",
+    "crates/memory",
+    "crates/scheduler",
+    "arch/x86_64",
+    "arch/aarch64",
+    "user/dealduck",
+    "user/dealdo",
+]
+
+[profile.release]
+lto = true
+opt-level = 3
