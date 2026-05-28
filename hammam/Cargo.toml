@@ -1,0 +1,8 @@
+[package]
+name = "hammam-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "2.6.0"
+volatile = "0.4.6"

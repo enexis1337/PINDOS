@@ -1,0 +1,122 @@
+extern crate alloc;
+
+use crate::arch::x86_64::context::Context as ArchContext;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use core::cell::UnsafeCell;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{spin_loop_hint, AtomicBool, Ordering};
+
+pub const STACK_SIZE: usize = 4096 * 4;
+
+/// Уникальный идентификатор задачи.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaskId(pub u64);
+
+/// Состояние задачи в планировщике.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    Running,
+    Ready,
+    Blocked,
+    Dead,
+}
+
+/// Внутренняя структура адресного пространства процесса.
+/// Пока заглушка, чтобы соответствовать полю `address_space`.
+pub struct AddressSpace;
+
+/// Простая `Mutex` для управления разделяемым доступом в `no_std`.
+pub struct Mutex<T> {
+    locked: AtomicBool,
+    data: UnsafeCell<T>,
+}
+
+unsafe impl<T: Send> Sync for Mutex<T> {}
+unsafe impl<T: Send> Send for Mutex<T> {}
+
+impl<T> Mutex<T> {
+    pub const fn new(inner: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            data: UnsafeCell::new(inner),
+        }
+    }
+
+    pub fn lock(&self) -> MutexGuard<'_, T> {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            spin_loop_hint();
+        }
+
+        MutexGuard { mutex: self }
+    }
+}
+
+pub struct MutexGuard<'a, T> {
+    mutex: &'a Mutex<T>,
+}
+
+impl<'a, T> Deref for MutexGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.mutex.data.get() }
+    }
+}
+
+impl<'a, T> DerefMut for MutexGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.mutex.data.get() }
+    }
+}
+
+impl<'a, T> Drop for MutexGuard<'a, T> {
+    fn drop(&mut self) {
+        self.mutex.locked.store(false, Ordering::Release);
+    }
+}
+
+/// Стек ядра задачи с указателем на вершину.
+pub struct KernelStack {
+    stack: Box<[u8; STACK_SIZE]>,
+    pub top: usize,
+}
+
+impl KernelStack {
+    pub fn new() -> Self {
+        let mut stack = Box::new([0u8; STACK_SIZE]);
+        let top = unsafe { stack.as_mut_ptr().add(STACK_SIZE) } as usize;
+        let top = top & !0x0F;
+
+        Self { stack, top }
+    }
+}
+
+/// Задача ядра Hammam.
+pub struct Task {
+    pub id: TaskId,
+    pub state: TaskState,
+    pub priority: i32,
+    pub context: ArchContext,
+    pub kernel_stack: KernelStack,
+    pub address_space: Arc<Mutex<AddressSpace>>,
+    pub vruntime: u64,
+}
+
+impl Task {
+    pub fn new(id: TaskId, priority: i32, address_space: Arc<Mutex<AddressSpace>>) -> Self {
+        Self {
+            id,
+            state: TaskState::Ready,
+            priority,
+            context: ArchContext::default(),
+            kernel_stack: KernelStack::new(),
+            address_space,
+            vruntime: 0,
+        }
+    }
+}
