@@ -26,6 +26,7 @@ const TIMER_DIVIDE_CODE: u32 = 0x3; // divide by 16
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 static mut LOCAL_APIC_BASE: u64 = 0;
 static mut IRQ_HANDLERS: [Option<fn()>; 256] = [None; 256];
+const IRQ_HANDLERS_LEN: usize = 256;
 
 /// Инициализирует локальный APIC.
 ///
@@ -116,7 +117,7 @@ fn wait_for_icr() {
 }
 
 pub fn register_irq_handler(vector: u8, handler: fn()) {
-    if (vector as usize) < unsafe { IRQ_HANDLERS.len() } {
+    if (vector as usize) < IRQ_HANDLERS_LEN {
         unsafe {
             IRQ_HANDLERS[vector as usize] = Some(handler);
         }

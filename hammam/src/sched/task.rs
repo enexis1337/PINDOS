@@ -4,8 +4,9 @@ use crate::arch::x86_64::context::Context as ArchContext;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::cell::UnsafeCell;
+use core::hint::spin_loop;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{spin_loop_hint, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub const STACK_SIZE: usize = 4096 * 4;
 
@@ -49,7 +50,7 @@ impl<T> Mutex<T> {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            spin_loop_hint();
+            spin_loop();
         }
 
         MutexGuard { mutex: self }
@@ -82,6 +83,7 @@ impl<'a, T> Drop for MutexGuard<'a, T> {
 
 /// Стек ядра задачи с указателем на вершину.
 pub struct KernelStack {
+    #[allow(dead_code)]
     stack: Box<[u8; STACK_SIZE]>,
     pub top: usize,
 }

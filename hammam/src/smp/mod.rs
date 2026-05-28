@@ -3,7 +3,6 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::marker::PhantomData;
 use core::ptr;
-use core::sync::atomic::AtomicUsize;
 
 use crate::acpi::madt::Madt;
 use crate::arch::x86_64::apic;
@@ -38,7 +37,6 @@ static mut PER_CPU_DATA: [PerCpuData; MAX_CPUS] = [PerCpuData {
 }; MAX_CPUS];
 
 static mut AP_STACKS: [*mut [u8; STACK_SIZE]; MAX_CPUS] = [ptr::null_mut(); MAX_CPUS];
-static AP_COUNT: AtomicUsize = AtomicUsize::new(1);
 
 pub struct PerCpu<T> {
     offset: usize,
