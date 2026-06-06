@@ -12,6 +12,14 @@ pub mod acpi;
 pub mod arch;
 pub mod sched;
 pub mod smp;
+pub mod loader;
+pub mod cap;
+pub mod process;
+pub mod userspace_blob;
+pub mod vfs;
+pub mod io;
+pub mod block;
+pub mod security;
 
 use boot_info::BootInfo;
 use alloc::vec::Vec;
@@ -29,6 +37,17 @@ pub unsafe extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     unsafe {
         drivers::serial::SERIAL.lock().init();
     }
+
+    // SAFETY: Инициализация GDT с дескрипторами Ring 0 и Ring 3, необходимая для работы ядра.
+    arch::gdt::init();
+
+    // SAFETY: Инициализация защитных механизмов ядра (SMEP, SMAP, NX, etc.)
+    security::enable_smep_smap();
+    security::enable_nx();
+    security::init_canary();
+
+    // SAFETY: Инициализация SYSCALL/SYSRET механизма для перехвата системных вызовов из Ring 3.
+    arch::syscall::init();
 
     kprintln!("====================================================");
     kprintln!("      PINDOS OS - Hammam Kernel Bootstrapping       ");

@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 bitflags = "2.6.0"
 volatile = "0.4.6"
+xmas-elf = "0.9"
+spin = "0.9"

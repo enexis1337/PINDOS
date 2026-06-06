@@ -1,0 +1,12 @@
+[Unit]
+Description=PINDOS Network Stack
+After=sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/net-server
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

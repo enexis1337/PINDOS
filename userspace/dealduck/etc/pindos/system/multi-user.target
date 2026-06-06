@@ -1,0 +1,11 @@
+# Multi-user target
+# Запускает пользовательские сервисы (сеть, хранилище, и т.д.)
+
+[Unit]
+Description=Multi-User System
+Wants=net-server.service
+Wants=nvme-driver.service
+After=sysinit.target
+
+[Install]
+WantedBy=default.target

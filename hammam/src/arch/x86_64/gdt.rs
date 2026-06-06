@@ -1,0 +1,200 @@
+use core::mem;
+
+// Селекторы сегментов с RPL (Requested Privilege Level)
+pub const KERNEL_CODE: u16 = 0x08;
+pub const KERNEL_DATA: u16 = 0x10;
+pub const USER_CODE: u16 = 0x18 | 3;  // RPL=3
+pub const USER_DATA: u16 = 0x20 | 3;  // RPL=3
+pub const TSS_SELECTOR: u16 = 0x28;
+
+/// Task State Segment (TSS) для x86-64
+/// Используется для хранения rsp0 - kernel stack pointer при переходе из Ring 3
+#[repr(C, packed(1))]
+pub struct Tss {
+    reserved0: u32,
+    pub rsp0: u64,      // Kernel stack pointer - загружается при syscall из Ring 3
+    pub rsp1: u64,
+    pub rsp2: u64,
+    reserved1: u64,
+    pub ist1: u64,      // Interrupt Stack Table
+    pub ist2: u64,
+    pub ist3: u64,
+    pub ist4: u64,
+    pub ist5: u64,
+    pub ist6: u64,
+    pub ist7: u64,
+    reserved2: u64,
+    reserved3: u16,
+    pub iomap_base: u16,
+}
+
+impl Tss {
+    pub const fn new() -> Self {
+        Tss {
+            reserved0: 0,
+            rsp0: 0,
+            rsp1: 0,
+            rsp2: 0,
+            reserved1: 0,
+            ist1: 0,
+            ist2: 0,
+            ist3: 0,
+            ist4: 0,
+            ist5: 0,
+            ist6: 0,
+            ist7: 0,
+            reserved2: 0,
+            reserved3: 0,
+            iomap_base: mem::size_of::<Tss>() as u16,
+        }
+    }
+}
+
+/// GDT дескриптор сегмента (8 байт)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SegmentDescriptor(u64);
+
+impl SegmentDescriptor {
+    /// Null дескриптор
+    pub const fn null() -> Self {
+        SegmentDescriptor(0)
+    }
+
+    /// Code сегмент (Ring 0 или Ring 3)
+    pub const fn code(dpl: u8) -> Self {
+        let flags = 0xA09B | ((dpl as u64) << 45); // P=1, DPL, S=1, Type=1011(code), L=1(64-bit)
+        SegmentDescriptor((flags << 40) | 0xFFFF)
+    }
+
+    /// Data сегмент (Ring 0 или Ring 3)
+    pub const fn data(dpl: u8) -> Self {
+        let flags = 0xA093 | ((dpl as u64) << 45); // P=1, DPL, S=1, Type=0011(data), L=1
+        SegmentDescriptor((flags << 40) | 0xFFFF)
+    }
+
+    /// TSS дескриптор (системный, 16 байт = 2 дескриптора)
+    /// Возвращает только нижние 8 байт, верхние 8 байт должны быть добавлены отдельно
+    pub fn tss(base: u64, limit: u32) -> [u64; 2] {
+        let base_low = base & 0xFFFFFF;
+        let base_high = (base >> 24) & 0xFF;
+        
+        let low = 0x0089 |                          // Type=1001(TSS available), P=1
+                 ((limit as u64) & 0xFFFF) |       // Limit low 16 bits
+                 (base_low << 16) |                // Base low 24 bits
+                 ((base_high & 0xFF) << 56);       // Base high 8 bits
+        
+        let high = (base >> 32) & 0xFFFFFFFF;      // Base high 32 bits
+        
+        [low, high]
+    }
+}
+
+/// GDT таблица
+pub struct Gdt {
+    table: [u64; 6],  // 6 дескрипторов: null, kernel code, kernel data, user code, user data, TSS low
+    tss: Tss,
+}
+
+static mut GDT: Gdt = Gdt {
+    table: [0; 6],
+    tss: Tss {
+        reserved0: 0,
+        rsp0: 0,
+        rsp1: 0,
+        rsp2: 0,
+        reserved1: 0,
+        ist1: 0,
+        ist2: 0,
+        ist3: 0,
+        ist4: 0,
+        ist5: 0,
+        ist6: 0,
+        ist7: 0,
+        reserved2: 0,
+        reserved3: 0,
+        iomap_base: 0,
+    },
+};
+
+static mut GDT_DESCRIPTOR: [u8; 10] = [0; 10];
+
+/// Инициализация GDT
+pub fn init() {
+    unsafe {
+        // Инициализируем таблицу
+        // 0x00 - Null
+        GDT.table[0] = SegmentDescriptor::null().0;
+        
+        // 0x08 - Kernel Code (Ring 0, 64-bit)
+        GDT.table[1] = SegmentDescriptor::code(0).0;
+        
+        // 0x10 - Kernel Data (Ring 0)
+        GDT.table[2] = SegmentDescriptor::data(0).0;
+        
+        // 0x18 - User Code (Ring 3, 64-bit)
+        GDT.table[3] = SegmentDescriptor::code(3).0;
+        
+        // 0x20 - User Data (Ring 3)
+        GDT.table[4] = SegmentDescriptor::data(3).0;
+        
+        // 0x28 - TSS (системный дескриптор, 16 байт)
+        GDT.tss.iomap_base = mem::size_of::<Tss>() as u16;
+        let tss_ptr = core::ptr::addr_of!(GDT.tss) as u64;
+        let tss_limit = (mem::size_of::<Tss>() - 1) as u32;
+        let tss_desc = SegmentDescriptor::tss(tss_ptr, tss_limit);
+        GDT.table[5] = tss_desc[0];
+        
+        // Загружаем GDT
+        let gdt_ptr = core::ptr::addr_of!(GDT.table) as u64;
+        let gdt_limit = (mem::size_of::<[u64; 6]>() - 1) as u16;
+        
+        // GDTR формат: [limit(2 байта)][base(8 байт)]
+        let gdtr: *mut u8 = core::ptr::addr_of_mut!(GDT_DESCRIPTOR[0]);
+        *(gdtr as *mut u16) = gdt_limit;
+        *(gdtr.add(2) as *mut u64) = gdt_ptr;
+        
+        // Загружаем GDT через lgdt
+        core::arch::asm!(
+            "lgdt [{}]",
+            in(reg) gdtr,
+            options(readonly, nostack, preserves_flags)
+        );
+        
+        // Перезагружаем Code Segment через дальний переход (ljmp)
+        core::arch::asm!(
+            "push {0}",
+            "lea rax, [rip + 2f]",
+            "push rax",
+            "lretq",
+            "2:",
+            in(reg) KERNEL_CODE as u64,
+            options(nostack)
+        );
+        
+        // Загружаем Data Segment регистры
+        core::arch::asm!(
+            "mov ds, {0:x}",
+            "mov es, {1:x}",
+            "mov ss, {2:x}",
+            in(reg) KERNEL_DATA,
+            in(reg) KERNEL_DATA,
+            in(reg) KERNEL_DATA,
+            options(nostack, preserves_flags)
+        );
+        
+        // Загружаем TSS через ltr
+        core::arch::asm!(
+            "ltr {0:x}",
+            in(reg) TSS_SELECTOR,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+/// Установка kernel stack для Ring 3 syscalls
+pub fn set_kernel_stack(rsp0: u64) {
+    unsafe {
+        GDT.tss.rsp0 = rsp0;
+    }
+}

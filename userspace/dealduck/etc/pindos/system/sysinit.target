@@ -1,0 +1,9 @@
+# System initialization target
+# Запускает обязательные системные сервисы перед всем остальным
+
+[Unit]
+Description=System Initialization
+After=
+
+[Install]
+WantedBy=default.target

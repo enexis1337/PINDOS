@@ -1,0 +1,31 @@
+[package]
+name = "net-server"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "net_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "net-server"
+path = "src/main.rs"
+
+[dependencies]
+smoltcp = { version = "0.11", default-features = false, features = [
+    "socket-tcp",
+    "socket-udp",
+    "socket-dns",
+    "proto-ipv4",
+    "proto-ipv6",
+    "medium-ethernet",
+    "alloc",
+] }
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true
+
+[profile.dev]
+opt-level = 1

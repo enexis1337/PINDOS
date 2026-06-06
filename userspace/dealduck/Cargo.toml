@@ -1,0 +1,18 @@
+[package]
+name = "dealduck"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dealduck"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true
+
+[profile.dev]
+opt-level = 1

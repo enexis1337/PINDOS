@@ -1,0 +1,12 @@
+[Unit]
+Description=NVMe Storage Driver
+After=sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nvme-driver
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
