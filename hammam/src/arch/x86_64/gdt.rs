@@ -166,7 +166,7 @@ pub fn init() {
             "push {0}",
             "lea rax, [rip + 2f]",
             "push rax",
-            "lretq",
+            "retfq",
             "2:",
             in(reg) KERNEL_CODE as u64,
             options(nostack)

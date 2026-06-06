@@ -33,10 +33,7 @@ fn main() {
     // 1. Найти virtio-net устройство на PCI шине
     let pci_dev = match pci::find_virtio_net() {
         Some(dev) => {
-            println!(
-                "[net-server] found virtio-net at PCI bus={} slot={}",
-                dev.bus, dev.slot
-            );
+            println!("[net-server] found virtio-net at PCI bus={} slot={}", dev.bus, dev.slot);
             dev
         }
         None => {
@@ -49,12 +46,12 @@ fn main() {
     unsafe {
         virtio::init_device(pci_dev.bar0);
     }
-    println!("[net-server] device initialized");
+    println!("[net-server] device initialized successfully");
 
     // 3. Инициализировать RX и TX очереди
     let rx_queue = unsafe { virtio::Virtqueue::init(pci_dev.bar0, 0) };
     let tx_queue = unsafe { virtio::Virtqueue::init(pci_dev.bar0, 1) };
-    println!("[net-server] RX and TX queues initialized");
+    println!("[net-server] RX and TX queues ready");
 
     // 4. Создать Device wrapper для smoltcp
     let mut device = VirtioNetDevice::new(rx_queue, tx_queue);
@@ -73,10 +70,12 @@ fn main() {
 
     let mut sockets = SocketSet::new(vec![]);
 
-    println!("[net-server] interface up:");
-    println!("  MAC: 52:54:00:12:34:56");
-    println!("  IPv4: 10.0.0.2/24");
-    println!("[net-server] event loop started");
+    println!("[net-server] network interface ready:");
+    println!("[net-server]   MAC:  52:54:00:12:34:56");
+    println!("[net-server]   IPv4: 10.0.0.2/24");
+    println!("[net-server]   Gateway: 10.0.0.1");
+    println!("[net-server]   DNS: 10.0.2.3");
+    println!("[net-server] entering main event loop");
 
     // 7. Event loop
     let mut poll_count = 0u64;
@@ -87,8 +86,8 @@ fn main() {
         poll_count += 1;
 
         // Периодическое логирование
-        if poll_count % 1_000_000 == 0 {
-            println!("[net-server] poll cycles: {}", poll_count);
+        if poll_count % 10_000_000 == 0 {
+            println!("[net-server] running (poll cycles: {})", poll_count);
         }
     }
 }

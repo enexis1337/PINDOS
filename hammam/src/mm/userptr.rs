@@ -117,8 +117,6 @@ pub fn validate_user_slice_mut(
     let start_page = ptr / PAGE_SIZE;
     let end_page = (end - 1) / PAGE_SIZE;
 
-    use crate::mm::PageFlags;
-
     for page_idx in start_page..=end_page {
         let page_vaddr = page_idx * PAGE_SIZE;
 

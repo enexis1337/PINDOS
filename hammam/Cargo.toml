@@ -8,3 +8,13 @@ bitflags = "2.6.0"
 volatile = "0.4.6"
 xmas-elf = "0.9"
 spin = "0.9"
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1

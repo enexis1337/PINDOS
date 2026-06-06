@@ -5,6 +5,28 @@
 
 extern crate alloc;
 
+// Multiboot2 header - MUST be absolutely first in the binary
+// Magic: 0xE85250D6, Arch: 0, Length: 16
+// Checksum: -(0xE85250D6 + 0 + 16) = 0x1AACAF2A
+const MB2_CHECKSUM: u32 = (0u32).wrapping_sub(0xE85250D6).wrapping_sub(0).wrapping_sub(16);
+
+core::arch::global_asm!(r#"
+.section .boot_header, "ax"
+.align 8
+.global multiboot2_header
+multiboot2_header:
+    .long 0xE85250D6          /* MB2_MAGIC */
+    .long 0               /* MB2_ARCH */
+    .long 16              /* MB2_HLEN */
+    .long 0x1AACAF2A      /* MB2_CHECKSUM (precomputed) */
+    .word 0               /* end tag type */
+    .word 0               /* end tag flags */
+    .long 8               /* end tag size */
+"#);
+
+pub mod multiboot2_header;
+pub mod multiboot2_entry;
+
 pub mod boot_info;
 pub mod drivers;
 pub mod mm;
@@ -176,8 +198,12 @@ pub unsafe extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     kprintln!("  [SUCCESS] Dynamic Vec allocated and filled: {:?}", vec_test);
 
     kprintln!("====================================================");
-    kprintln!("System is ready. Entering idle loop...");
+    kprintln!("System is ready.");
+    kprintln!("Starting service manager (dealduck)...");
+    kprintln!("====================================================");
 
+    // TODO: Запустить dealduck service manager из userspace_blob
+    // Временно: idle loop
     loop {
         // SAFETY: Безопасный asm-интринсик останова процессора до следующего прерывания,
         // чтобы не перегревать реальный ПК в бесконечном цикле.
