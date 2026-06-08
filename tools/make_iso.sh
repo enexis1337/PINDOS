@@ -1,53 +1,79 @@
 #!/bin/bash
 set -e
 
-# Convert Windows path if running from WSL
-KERNEL="hammam/target/x86_64-unknown-none/debug/hammam-kernel"
+KERNEL_ELF="${KERNEL_PATH:-hammam/target/x86_64-unknown-none/debug/hammam-kernel}"
 ISO_DIR="iso_root"
 OUTPUT="hammam.iso"
 
-# If running from WSL, ensure we're in the right directory
 if [ ! -d "hammam" ]; then
-    echo "[ERROR] Not in project root. Current dir: $(pwd)"
+    echo "[ERROR] Not in project root"
     exit 1
 fi
 
-# Проверяем что ядро собрано
-if [ ! -f "$KERNEL" ]; then
-    echo "[ERROR] Kernel not found at $KERNEL"
-    ls -la hammam/target/x86_64-unknown-none/debug/ 2>/dev/null || echo "Debug dir not found"
+if [ ! -f "$KERNEL_ELF" ]; then
+    echo "[ERROR] Kernel not found at $KERNEL_ELF"
     exit 1
 fi
 
-echo "[1] Preparing ISO directory structure..."
-rm -rf "$ISO_DIR"
+echo "[1] Preparing ISO directory..."
 mkdir -p "$ISO_DIR/boot/grub"
 
 echo "[2] Copying kernel..."
-cp "$KERNEL" "$ISO_DIR/boot/hammam.elf"
+echo "  Using kernel: $KERNEL_ELF"
+cp "$KERNEL_ELF" "$ISO_DIR/boot/hammam.elf"
+chmod 644 "$ISO_DIR/boot/hammam.elf"
 
-echo "[3] Creating GRUB configuration..."
+echo "[3] Creating GRUB config..."
 cat > "$ISO_DIR/boot/grub/grub.cfg" << 'EOF'
-set timeout=0
+set timeout=3
 set default=0
 
-menuentry "PINDOS / Hammam" {
+menuentry "PINDOS Hammam Kernel" {
     multiboot2 /boot/hammam.elf
     boot
 }
 EOF
 
-echo "[4] Building ISO with GRUB..."
-grub-mkrescue -o "$OUTPUT" "$ISO_DIR" 2>&1 || {
-    echo "[ERROR] grub-mkrescue failed"
+echo "[4] Creating ISO with grub-mkrescue..."
+# Build into a temp file first so a locked hammam.iso (e.g. QEMU still running)
+# does not block grub-mkrescue.
+OUTPUT_TMP="${OUTPUT}.new"
+
+if command -v grub-mkrescue >/dev/null 2>&1; then
+    MKRESCUE=grub-mkrescue
+elif command -v grub2-mkrescue >/dev/null 2>&1; then
+    MKRESCUE=grub2-mkrescue
+else
+    echo "[ERROR] grub-mkrescue not found!"
+    echo "Install: sudo apt install grub-pc-bin xorriso"
     exit 1
-}
+fi
+
+rm -f "$OUTPUT_TMP"
+"$MKRESCUE" -o "$OUTPUT_TMP" "$ISO_DIR" 2>&1 | grep -v "NOTE:" || true
+
+if [ ! -f "$OUTPUT_TMP" ]; then
+    echo "[ERROR] ISO creation failed"
+    exit 1
+fi
+
+if rm -f "$OUTPUT" 2>/dev/null; then
+    mv -f "$OUTPUT_TMP" "$OUTPUT"
+elif mv -f "$OUTPUT_TMP" "$OUTPUT" 2>/dev/null; then
+    :
+else
+    echo "[ERROR] Cannot replace $OUTPUT (file is locked)."
+    echo "Close QEMU or any program using the ISO, then run again."
+    echo "New image is available at: $OUTPUT_TMP"
+    exit 1
+fi
 
 if [ -f "$OUTPUT" ]; then
     SIZE=$(ls -lh "$OUTPUT" | awk '{print $5}')
-    echo "[OK] ISO created successfully: $OUTPUT ($SIZE)"
-    exit 0
+    echo ""
+    echo "[OK] ISO created: $OUTPUT ($SIZE)"
+    echo ""
 else
-    echo "[ERROR] Failed to create ISO"
+    echo "[ERROR] ISO creation failed"
     exit 1
 fi

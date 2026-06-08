@@ -1,33 +1,42 @@
+OUTPUT_FORMAT("elf64-x86-64")
+OUTPUT_ARCH(i386:x86-64)
 ENTRY(_start)
 
 SECTIONS {
-    /* Start at 1MB physical address */
+    /* Start at 1 MiB (standard for multiboot) */
     . = 0x00100000;
     
-    /* Boot header MUST be absolutely first - before any code */
-    .boot_header : {
-        KEEP(*(.boot_header))
+    /* Multiboot2 header must be in first 32KB and in loadable segment */
+    .text : ALIGN(4096) {
+        KEEP(*(.text.boot_header))
+        *(.text.boot)
+        KEEP(*(.text._hammam_entry))
+        *(.text)
+        *(.text.*)
     }
     
-    /* Code and read-only data */
-    .text : {
-        *(.text .text.*)
-        *(.rodata .rodata.*)
+    .rodata : ALIGN(4096) {
+        *(.rodata)
+        *(.rodata.*)
     }
     
-    /* PVH note */
-    .note.pvh : {
-        KEEP(*(.note.pvh))
+    .data : ALIGN(4096) {
+        /* Boot workspace must be in a loaded segment (GRUB maps PT_LOAD only). */
+        KEEP(*(.data.boot))
+        *(.data)
+        *(.data.*)
+        *(.got)
     }
     
-    /* Initialized data */
-    .data : {
-        *(.data .data.*)
-    }
-    
-    /* Uninitialized data */
-    .bss : {
-        *(.bss .bss.*)
+    .bss : ALIGN(4096) {
+        *(.bss)
+        *(.bss.*)
         *(COMMON)
+    }
+    
+    /DISCARD/ : {
+        *(.note.GNU-stack)
+        *(.note.pvh)
+        *(.eh_frame*)
     }
 }

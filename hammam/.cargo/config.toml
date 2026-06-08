@@ -5,6 +5,7 @@ target = "x86_64-unknown-none"
 rustflags = [
     "-C", "link-arg=-Tlink.ld",
     "-C", "link-arg=-zmax-page-size=0x1000",
+    "-C", "link-arg=-znorelro",
     "-C", "link-arg=--static",
     "-C", "link-arg=-nostdlib",
     "-C", "relocation-model=static",

@@ -1,0 +1,45 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# PINDOS artifacts
+hammam.iso
+hammam.iso.new
+iso_root/
+drunned/
+
+# Debug logs
+serial.log
+qemu_debug.log
+*.log
+
+# Temporary files
+*.rlib
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+
+# Build tools
+.cargo/
+!.cargo/config.toml
+
+# WSL artifacts
+.wslconfig
