@@ -238,6 +238,14 @@ impl BuddyAllocator {
         self.total_frames
     }
 
+    /// Инициализирует аллокатор известным свободным диапазоном памяти.
+    /// Используется, когда нет карты памяти от загрузчика.
+    pub fn bootstrap(&mut self, start: u64, end: u64) {
+        if start < end {
+            unsafe { self.add_memory_region(start, end); }
+        }
+    }
+
     /// Возвращает количество доступных (свободных) физических фреймов.
     pub fn free_frames(&self) -> usize {
         self.free_frames

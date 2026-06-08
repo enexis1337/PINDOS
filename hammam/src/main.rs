@@ -28,29 +28,11 @@ pub mod security;
 /// Вызывается после установки стека и переключения в 64-битный режим.
 #[no_mangle]
 pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
-    // Инициализация минимальной IDT до включения прерываний
-    unsafe { crate::interrupts::init_idt(); }
-
-    // Инициализация UART для вывода
-    unsafe { (*drivers::serial::SERIAL.get()).init(); }
-    
-    kprintln!("====================================================");
-    kprintln!("      PINDOS OS - Hammam Kernel (Multiboot2)       ");
-    kprintln!("====================================================");
-    kprintln!();
-    kprintln!("Multiboot2 magic: {:#x}", magic);
-    kprintln!("Multiboot2 info:  {:#x}", mbi_ptr);
-    kprintln!();
-    kprintln!("[OK] Kernel booted successfully!");
-    kprintln!("[OK] Serial output initialized");
-    kprintln!();
-    kprintln!("*** Hammam kernel halted ***");
-    
-    // Halt процессор
+    unsafe {
+        core::arch::asm!("mov dx, 0x3F8", "mov al, 'E'", "out dx, al", options(nostack));
+    }
     loop {
-        unsafe { 
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
+        unsafe { core::arch::asm!("hlt", options(nostack)); }
     }
 }
 

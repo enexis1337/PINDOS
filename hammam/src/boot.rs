@@ -62,8 +62,8 @@ static mut BOOT_WORKSPACE: BootWorkspace = BootWorkspace {
     stack: [0; BOOT_STACK_BYTES],
 };
 
-// `.data.boot` is the first section in `.data` at 0x103000.
-const DATA_BOOT_VADDR: u32 = 0x103000;
+// `.data.boot` is the first section in `.data` at 0x101000.
+const DATA_BOOT_VADDR: u32 = 0x101000;
 const BOOT_PT_ADDR: u32 = DATA_BOOT_VADDR;
 const BOOT_PT_PDPT_OFF: u32 = 4096;
 const BOOT_PT_PD_OFF: u32 = 8192;
@@ -125,6 +125,9 @@ pub extern "C" fn _start() -> ! {
             // Flat data segments for rep stos and memory access under GRUB paging.
             "movw %ds, %ax",
             "movw %ax, %es",
+            "movw $0x3F8, %dx",
+            "movb $'4', %al",
+            "outb %al, %dx",
             // Mask PICs (disable all hardware IRQs) until IDT is ready
             "movb $0xff, %al",
             "outb %al, $0x21",
@@ -230,21 +233,46 @@ pub extern "C" fn _start() -> ! {
             "orl $0x80000000, %eax",
             "mov %eax, %cr0",
 
+            // Debug: write 'a' to COM1 after paging enabled
+            "movw $0x3F8, %dx",
+            "movb $'a', %al",
+            "outb %al, (%dx)",
+
             // Setup GDT pointer base address
             "movl ${gdt_addr}, %eax",
             "movl ${gdt_ptr_addr}, %ebx",
             "movl %eax, 2(%ebx)",        // Set base (lower 32 bits)
             "movl $0, 6(%ebx)",          // Set base (upper 32 bits)
 
+            // Debug: write 'b' to COM1 before lgdt
+            "movw $0x3F8, %dx",
+            "movb $'b', %al",
+            "outb %al, (%dx)",
+
             // Load GDT for 64-bit mode  
             "lgdt (%ebx)",
 
+            // Debug: write 'c' to COM1 after lgdt
+            "movw $0x3F8, %dx",
+            "movb $'c', %al",
+            "outb %al, (%dx)",
+
+            // Debug: write 'd' right before lret
+            "movw $0x3F8, %dx",
+            "movb $'d', %al",
+            "outb %al, (%dx)",
+
             // Far jump to 64-bit code segment
-            // Use a trick: pushl and lret to do far jump
             "pushl $0x08",               // Code segment selector  
             "leal start64, %eax",
             "pushl %eax",                // Offset
             "lret",                      // Pop CS:EIP and jump
+
+            // Debug: write 'e' if lret failed and we land here
+            "movw $0x3F8, %dx",
+            "movb $'e', %al",
+            "outb %al, (%dx)",
+            "hlt",
 
             "no_long_mode:",
             "hlt",
@@ -252,28 +280,19 @@ pub extern "C" fn _start() -> ! {
 
             ".code64",
             "start64:",
-            "movw $0x10, %ax",
-            "movw %ax, %ds",
-            "movw %ax, %es",
-            "movw %ax, %ss",
-            "xorw %ax, %ax",
-            "movw %ax, %fs",
-            "movw %ax, %gs",
-
-            // Загрузить аргументы multiboot2
+            // Загрузить magic и mbi_ptr из handoff области
             "movabs ${handoff_magic}, %rax",
             "movl (%rax), %eax",
             "movabs ${handoff_info}, %rbx",
             "movl (%rbx), %ebx",
 
-            // Передать управление на _hammam_entry
-            // который установит стек и вызовет Rust код
-            "jmp _hammam_entry",
-
-            // Debug: write '3' to COM1 before handing off to _hammam_entry
+            // Отладка: перед прыжком на _hammam_entry
             "movw $0x3F8, %dx",
-            "movb $'3', %al",
-            "outb %al, (%dx)",
+            "movb $'5', %al",
+            "outb %al, %dx",
+
+            // Передать управление _hammam_entry
+            "jmp _hammam_entry",
 
             // Early 32-bit exception handler
             "early_exception32:",

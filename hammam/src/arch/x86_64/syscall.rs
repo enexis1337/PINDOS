@@ -165,8 +165,7 @@ pub extern "C" fn syscall_dispatch(nr: u64, a0: u64, a1: u64, a2: u64, _a3: u64,
 
 /// exit(code) — завершить процесс
 fn sys_exit(code: i32) -> i64 {
-    kprintln!("[SYSCALL] exit({})", code);
-    // TODO фаза 4.4 — завершить текущий Task
+    kprintln!("[USERSPACE exit({})] Halting", code);
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nostack, preserves_flags));
@@ -174,13 +173,12 @@ fn sys_exit(code: i32) -> i64 {
     }
 }
 
-/// write(fd, buf, count) — вывести данные
+/// write(fd, buf, count) — вывести данные на serial
 fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
     if fd != 1 {
-        return -9; // -EBADF
+        return -9;
     }
 
-    // Валидировать что buf_ptr указывает на userspace память
     let user_buffer = match validate_user_slice(buf_ptr, len) {
         Ok(buf) => buf,
         Err(e) => {
@@ -189,12 +187,27 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
         }
     };
 
-    // Теперь безопасно работаем с данными из userspace
-    if let Ok(s) = core::str::from_utf8(user_buffer) {
-        kprintln!("[USERSPACE] {}", s);
-    } else {
-        kprintln!("[USERSPACE] (binary data, {} bytes)", user_buffer.len());
+    for &b in user_buffer {
+        unsafe { crate::drivers::serial::SERIAL.get().write_byte(b); }
     }
 
     len as i64
+}
+
+/// Прыжок в userspace через SYSRET.
+/// Устанавливает RCX=RIP, R11=RFLAGS, RSP=user_stack и выполняет sysretq.
+pub unsafe fn jump_to_userspace(entry: u64, stack: u64) -> ! {
+    unsafe {
+        core::arch::asm!(
+            "mov rcx, {entry}",
+            "mov r11, {rflags}",
+            "mov rsp, {stack}",
+            "xor rbp, rbp",
+            "sysretq",
+            entry = in(reg) entry,
+            rflags = in(reg) 0x202u64,
+            stack = in(reg) stack,
+            options(noreturn)
+        )
+    }
 }

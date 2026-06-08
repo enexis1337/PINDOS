@@ -79,7 +79,7 @@ impl PageTableEntry {
 /// Таблица страниц x86_64, содержащая ровно 512 записей по 8 байт (ровно 4096 байт).
 #[repr(align(4096))]
 pub struct PageTable {
-    entries: [PageTableEntry; 512],
+    pub(crate) entries: [PageTableEntry; 512],
 }
 
 impl Default for PageTable {
@@ -213,6 +213,22 @@ pub unsafe fn map_page(
     // SAFETY: Ссылка на валидную PD таблицу.
     let pd = unsafe { get_table(pd_frame) };
     let pd_idx = pd_index(virt);
+
+    // Если PD entry — огромная страница (2 MiB), разбиваем её на 4 KiB страницы
+    if pd.entries[pd_idx].flags().contains(PageFlags::PRESENT) && pd.entries[pd_idx].flags().contains(PageFlags::HUGE_PAGE) {
+        let huge_phys = pd.entries[pd_idx].frame().unwrap().start_address;
+        let pt_frame = allocator.allocate(0).map_err(|_| MapError::FrameAllocationFailed)?;
+        // SAFETY: Заполняем новую таблицу страниц.
+        let pt = unsafe { get_table(pt_frame) };
+        let huge_flags = pd.entries[pd_idx].flags() & !PageFlags::HUGE_PAGE;
+        for i in 0..512 {
+            let phys = PhysFrame::new(huge_phys + (i * 0x1000) as u64);
+            pt.entries[i].set_frame(phys, huge_flags);
+        }
+        let pd_flags = PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER_ACCESSIBLE;
+        pd.entries[pd_idx].set_frame(pt_frame, pd_flags);
+    }
+
     let pt_frame = if pd.entries[pd_idx].flags().contains(PageFlags::PRESENT) {
         pd.entries[pd_idx].frame().unwrap()
     } else {

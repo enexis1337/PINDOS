@@ -21,25 +21,38 @@ pub static KERNEL_STACK: KernelStack = KernelStack([0; 64 * 1024]);
 pub unsafe extern "C" fn _hammam_entry() -> ! {
     naked_asm!(
         // RAX=magic, RBX=mbi_ptr — переданы из boot.rs
-        
+
+        // Отладка: мы вошли в _hammam_entry
+        "mov dx, 0x3F8",
+        "mov al, '6'",
+        "out dx, al",
+
         // Установить свежий выровненный стек
         "lea rsp, [rip + KERNEL_STACK]",
         "add rsp, {stack_size}",
         "and rsp, -16",
-        
-        // Переложить аргументы: RAX/RBX -> RDI/RSI (System V ABI)
+
+        // Отладка: стек установлен
+        "mov dx, 0x3F8",
+        "mov al, '7'",
+        "out dx, al",
+
         "mov rdi, rax",
         "mov rsi, rbx",
-        
-        // Вызвать Rust entry point
+
+        // Отладка: перед call
+        "mov dx, 0x3F8",
+        "mov al, '8'",
+        "out dx, al",
+
         "call _start_multiboot2",
-        
+
         // Если вернулась (не должна) — halt
         "99:",
         "cli",
         "hlt",
         "jmp 99b",
-        
+
         stack_size = const 64 * 1024usize,
     );
 }
