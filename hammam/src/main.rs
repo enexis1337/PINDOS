@@ -32,7 +32,7 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     unsafe { crate::interrupts::init_idt(); }
 
     // Инициализация UART для вывода
-    unsafe { drivers::serial::SERIAL.lock().init(); }
+    unsafe { (*drivers::serial::SERIAL.get()).init(); }
     
     kprintln!("====================================================");
     kprintln!("      PINDOS OS - Hammam Kernel (Multiboot2)       ");

@@ -1,10 +1,11 @@
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::cell::UnsafeCell;
 
 /// Простой Spinlock Mutex для синхронизации доступа к аппаратуре в no_std окружении.
 pub struct SpinMutex<T> {
     locked: AtomicBool,
-    data: core::cell::UnsafeCell<T>,
+    data: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Sync for SpinMutex<T> {}
@@ -14,7 +15,7 @@ impl<T> SpinMutex<T> {
     pub const fn new(data: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
-            data: core::cell::UnsafeCell::new(data),
+            data: UnsafeCell::new(data),
         }
     }
 
@@ -146,15 +147,28 @@ impl fmt::Write for Serial {
     }
 }
 
-/// Глобальный экземпляр последовательного порта под защитой спинлока.
-pub static SERIAL: SpinMutex<Serial> = SpinMutex::new(Serial::new(COM1_BASE));
+/// Wrapper вокруг UnsafeCell для реализации Sync (ядро однопоточное).
+pub struct SerialPort(UnsafeCell<Serial>);
+
+unsafe impl Sync for SerialPort {}
+
+impl SerialPort {
+    pub unsafe fn get(&self) -> &mut Serial {
+        // SAFETY: Вызывающий должен гарантировать отсутствие гонок.
+        unsafe { &mut *self.0.get() }
+    }
+}
+
+/// Глобальный экземпляр последовательного порта (без блокировки — ядро однопоточное).
+pub static SERIAL: SerialPort = SerialPort(UnsafeCell::new(Serial::new(COM1_BASE)));
 
 /// Макрос для вывода форматированной строки в COM-порт ядра Hammam.
 #[macro_export]
 macro_rules! kprint {
     ($($arg:tt)*) => {
-        let mut serial = $crate::drivers::serial::SERIAL.lock();
-        <$crate::drivers::serial::Serial as core::fmt::Write>::write_fmt(&mut *serial, format_args!($($arg)*)).ok();
+        // SAFETY: Ядро однопоточное на этапе загрузки — без блокировки безопасен.
+        let serial = unsafe { $crate::drivers::serial::SERIAL.get() };
+        <$crate::drivers::serial::Serial as core::fmt::Write>::write_fmt(serial, format_args!($($arg)*)).ok();
     };
 }
 
