@@ -3,6 +3,7 @@
 dRun — тулчейн сборки PINDOS / Hammam kernel.
 
 Использование:
+  python drun.py -get            # установить все зависимости
   python drun.py -b              # собрать debug
   python drun.py -c              # cargo check всех компонентов
   python drun.py -T              # собрать + запустить QEMU с отладкой
@@ -44,12 +45,162 @@ def run(cmd: list[str], cwd: Path = ROOT, check: bool = True) -> int:
         sys.exit(result.returncode)
     return result.returncode
 
-def wsl(cmd: str, check: bool = True) -> int:
-    """Выполнить команду внутри WSL2."""
-    # Просто выполняем команду в WSL, предполагая что мы уже в правильной директории
-    # WSL автоматически монтирует C: в /mnt/c
-    full_cmd = cmd
-    return run(["wsl", "bash", "-c", full_cmd], check=check)
+def sh(cmd: str, check: bool = True) -> int:
+    """Выполнить shell-команду через bash."""
+    return run(["bash", "-c", cmd], check=check)
+
+def check_tool(name: str) -> bool:
+    """Проверить наличие утилиты в PATH."""
+    return shutil.which(name) is not None
+
+# ── Установка зависимостей ─────────────────────────────────────────────────────
+def cmd_get():
+    """-get : установить все зависимости для сборки ядра и ОС."""
+    banner("dRun GET — установка зависимостей")
+
+    # ── 1. Определить пакетный менеджер ───────────────────────────────────────
+    if check_tool("apt-get"):
+        pkg_mgr = "apt"
+    elif check_tool("dnf"):
+        pkg_mgr = "dnf"
+    elif check_tool("pacman"):
+        pkg_mgr = "pacman"
+    else:
+        print("[FAIL] Не удалось определить пакетный менеджер (apt/dnf/pacman).")
+        print("       Установите зависимости вручную — список выведен ниже.")
+        _print_deps_manual()
+        sys.exit(1)
+
+    print(f"  Пакетный менеджер: {pkg_mgr}\n")
+
+    # ── 2. Системные пакеты ───────────────────────────────────────────────────
+    #   grub-pc-bin / grub2-pc        — grub-mkrescue (создание ISO)
+    #   xorriso                       — ISO 9660 backend для grub-mkrescue
+    #   qemu-system-x86               — эмулятор для тестирования
+    #   binutils / llvm               — objcopy для патча ELF OS/ABI
+    #   gcc / build-essential         — линковщик и libc (нужны cargo для host-утилит)
+    #   cpio                          — сборка initramfs
+    #   nasm                          — ассемблер (на случай отдельных .asm файлов)
+    #   curl                          — установщик rustup
+
+    pkg_map = {
+        "apt": [
+            "build-essential",
+            "gcc",
+            "binutils",
+            "llvm",
+            "grub-pc-bin",
+            "grub-efi-amd64-bin",
+            "xorriso",
+            "qemu-system-x86",
+            "cpio",
+            "nasm",
+            "curl",
+        ],
+        "dnf": [
+            "gcc",
+            "binutils",
+            "llvm",
+            "grub2-pc",
+            "grub2-efi-x64",
+            "xorriso",
+            "qemu-system-x86",
+            "cpio",
+            "nasm",
+            "curl",
+        ],
+        "pacman": [
+            "base-devel",
+            "gcc",
+            "binutils",
+            "llvm",
+            "grub",
+            "xorriso",
+            "qemu-system-x86",
+            "cpio",
+            "nasm",
+            "curl",
+        ],
+    }
+
+    install_cmds = {
+        "apt":    ["sudo", "apt-get", "install", "-y"],
+        "dnf":    ["sudo", "dnf",     "install", "-y"],
+        "pacman": ["sudo", "pacman",  "-S", "--noconfirm"],
+    }
+
+    pkgs = pkg_map[pkg_mgr]
+
+    print("  [1/4] Установка системных пакетов...")
+    if pkg_mgr == "apt":
+        run(["sudo", "apt-get", "update", "-y"], check=False)
+    run(install_cmds[pkg_mgr] + pkgs)
+
+    # ── 3. Rust + rustup ──────────────────────────────────────────────────────
+    print("\n  [2/4] Проверка Rust / rustup...")
+    if check_tool("rustup"):
+        print("  rustup уже установлен, обновляем...")
+        run(["rustup", "update"])
+    else:
+        print("  Устанавливаем rustup...")
+        sh("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path")
+        # Добавить cargo в PATH для текущего сеанса
+        cargo_bin = Path.home() / ".cargo" / "bin"
+        os.environ["PATH"] = str(cargo_bin) + ":" + os.environ.get("PATH", "")
+        print(f"\n  Cargo bin добавлен в PATH сеанса: {cargo_bin}")
+        print("  Не забудьте добавить в ~/.bashrc или ~/.zshrc:")
+        print(f'    export PATH="$HOME/.cargo/bin:$PATH"')
+
+    # ── 4. Rust toolchain и таргет ────────────────────────────────────────────
+    print("\n  [3/4] Установка Rust nightly + target x86_64-unknown-none...")
+    run(["rustup", "toolchain", "install", "nightly"])
+    run(["rustup", "override",  "set",     "nightly"],   cwd=HAMMAM_DIR)
+    run(["rustup", "target",    "add",     TARGET],      cwd=HAMMAM_DIR)
+    run(["rustup", "component", "add",     "rust-src"],  cwd=HAMMAM_DIR)
+    run(["rustup", "component", "add",     "llvm-tools-preview"], cwd=HAMMAM_DIR)
+
+    # ── 5. Проверка итога ─────────────────────────────────────────────────────
+    print("\n  [4/4] Проверка установленных инструментов...")
+    tools = [
+        ("rustc",             "Rust compiler"),
+        ("cargo",             "Cargo"),
+        ("grub-mkrescue",     "grub-mkrescue"),
+        ("xorriso",           "xorriso"),
+        ("qemu-system-x86_64","QEMU"),
+        ("objcopy",           "objcopy (binutils)"),
+        ("cpio",              "cpio"),
+        ("nasm",              "nasm"),
+    ]
+
+    all_ok = True
+    for tool, label in tools:
+        found = check_tool(tool)
+        status = "[OK]  " if found else "[MISS]"
+        if not found:
+            all_ok = False
+        print(f"    {status} {label:<30} ({tool})")
+
+    print()
+    if all_ok:
+        print("[OK] Все зависимости установлены. Можно собирать: python drun.py -b")
+    else:
+        print("[WARN] Некоторые инструменты не найдены — см. выше.")
+        print("       Возможно, нужно открыть новый терминал (PATH обновится).")
+
+def _print_deps_manual():
+    """Вывести список зависимостей для ручной установки."""
+    print("""
+  Системные пакеты (названия для apt/debian):
+    build-essential gcc binutils llvm
+    grub-pc-bin grub-efi-amd64-bin xorriso
+    qemu-system-x86 cpio nasm curl
+
+  Rust:
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    rustup toolchain install nightly
+    rustup target add x86_64-unknown-none
+    rustup component add rust-src llvm-tools-preview
+""")
 
 def ensure_drunned():
     DRUNNED.mkdir(exist_ok=True)
@@ -114,8 +265,8 @@ def cmd_build():
     print("  Сборка Hammam kernel...")
     run(["cargo", "build", "--target", TARGET], cwd=HAMMAM_DIR)
     
-    print("\n  Создание ISO через WSL2...")
-    wsl("bash tools/make_iso.sh")
+    print("\n  Создание ISO...")
+    sh("bash tools/make_iso.sh")
     
     ensure_drunned()
     copy_artifact(KERNEL_DEBUG, "hammam-kernel-debug")
@@ -132,7 +283,7 @@ def cmd_test():
     run(["cargo", "build", "--target", TARGET], cwd=HAMMAM_DIR)
     
     print("  Создание ISO...")
-    wsl("bash tools/make_iso.sh")
+    sh("bash tools/make_iso.sh")
     copy_artifact(ISO_PATH, "pindos-debug.iso")
     
     # Запустить QEMU
@@ -182,9 +333,9 @@ def cmd_release(version: str):
     run(["cargo", "build", "--target", TARGET, "--release"], cwd=HAMMAM_DIR)
     
     # Создать ISO из release бинаря
-    print("  Создание release ISO через WSL2...")
-    wsl(f"KERNEL_PATH=hammam/target/x86_64-unknown-none/release/hammam-kernel "
-        f"bash tools/make_iso.sh")
+    print("  Создание release ISO...")
+    sh(f"KERNEL_PATH=hammam/target/x86_64-unknown-none/release/hammam-kernel "
+       f"bash tools/make_iso.sh")
     
     ensure_drunned()
     copy_artifact(KERNEL_RELEASE, kernel_name)
@@ -320,14 +471,17 @@ def main():
     parser.add_argument("-T", action="store_true", help="собрать и запустить QEMU")
     parser.add_argument("-r", metavar="VERSION",   help="release ISO (например: 0.1-moorino)")
     parser.add_argument("-cl", "--clean", action="store_true", help="очистить артефакты сборки")
+    parser.add_argument("-get", action="store_true", help="установить все зависимости для сборки")
     
     args = parser.parse_args()
     
-    if not any([args.b, args.c, args.T, args.r, args.clean]):
+    if not any([args.b, args.c, args.T, args.r, args.clean, args.get]):
         parser.print_help()
         sys.exit(0)
     
-    if args.c:
+    if args.get:
+        cmd_get()
+    elif args.c:
         cmd_check()
     elif args.b:
         cmd_build()
