@@ -89,10 +89,9 @@ pub struct Multiboot2BootInfo {
     pub tags: [u8; 0],
 }
 
-/// Entry point который GRUB вызывает через Multiboot2
-/// Вызывается из 64-bit режима после переключения в boot.rs
-#[no_mangle]
-pub unsafe extern "C" fn _start_multiboot2(magic: u64, boot_info_addr: u64) -> ! {
+/// Старый entry point — не используется, оставлен как архив разбора тегов Multiboot2.
+#[allow(dead_code)]
+pub unsafe fn _legacy_multiboot2_entry(magic: u64, boot_info_addr: u64) -> ! {
     // КРИТИЧЕСКИ ВАЖНО: Установить IDT перед любыми операциями
     unsafe { setup_idt(); }
     

@@ -28,9 +28,28 @@ pub mod security;
 /// Вызывается после установки стека и переключения в 64-битный режим.
 #[no_mangle]
 pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
-    unsafe {
-        core::arch::asm!("mov dx, 0x3F8", "mov al, 'E'", "out dx, al", options(nostack));
+    // ── Шаг 0: инициализируем serial (COM1) ─────────────────────────────────
+    // SAFETY: единственный вызов при старте, до любых других потоков.
+    unsafe { drivers::serial::SERIAL.get().init(); }
+
+    kprintln!("====================================================");
+    kprintln!("  PINDOS Hammam Kernel — boot sequence");
+    kprintln!("====================================================");
+    kprintln!("[boot] magic = {:#010x}", magic);
+
+    const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
+    if magic != MULTIBOOT2_MAGIC {
+        panic!("invalid Multiboot2 magic: {:#010x}", magic);
     }
+    kprintln!("[boot] Multiboot2 magic OK");
+
+    // ── Шаг 1: GDT ──────────────────────────────────────────────────────────
+    kprintln!("[step 1] init GDT...");
+    // SAFETY: вызывается один раз при старте до включения прерываний.
+    unsafe { arch::x86_64::gdt::init(); }
+    kprintln!("[step 1] GDT OK");
+
+    kprintln!("[boot] step 1 complete — halting");
     loop {
         unsafe { core::arch::asm!("hlt", options(nostack)); }
     }
