@@ -39,12 +39,7 @@ def banner(text: str):
 
 def run(cmd: list[str], cwd: Path = ROOT, check: bool = True) -> int:
     print(f"  $ {' '.join(str(c) for c in cmd)}")
-    # Добавляем ~/.cargo/bin в PATH чтобы cargo/rustc были доступны
-    env = os.environ.copy()
-    cargo_bin = str(Path.home() / ".cargo" / "bin")
-    if cargo_bin not in env.get("PATH", ""):
-        env["PATH"] = cargo_bin + ":" + env.get("PATH", "")
-    result = subprocess.run(cmd, cwd=cwd, check=False, env=env)
+    result = subprocess.run(cmd, cwd=cwd, check=False)
     if check and result.returncode != 0:
         print(f"\n[FAIL] команда завершилась с кодом {result.returncode}")
         sys.exit(result.returncode)
