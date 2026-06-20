@@ -32,9 +32,7 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     // SAFETY: единственный вызов при старте, до любых других потоков.
     unsafe { drivers::serial::SERIAL.get().init(); }
 
-    kprintln!("====================================================");
-    kprintln!("  PINDOS Hammam Kernel — boot sequence");
-    kprintln!("====================================================");
+    kprintln!(" PINDOS booting...");
     kprintln!("[boot] magic = {:#010x}", magic);
 
     const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
