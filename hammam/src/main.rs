@@ -28,9 +28,7 @@ pub mod security;
 /// Вызывается после установки стека и переключения в 64-битный режим.
 #[no_mangle]
 pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
-    unsafe {
-        core::arch::asm!("mov dx, 0x3F8", "mov al, 'E'", "out dx, al", options(nostack));
-    }
+    kprintln!("Hammam / PINDOS booting...");
     loop {
         unsafe { core::arch::asm!("hlt", options(nostack)); }
     }

@@ -22,28 +22,13 @@ pub unsafe extern "C" fn _hammam_entry() -> ! {
     naked_asm!(
         // RAX=magic, RBX=mbi_ptr — переданы из boot.rs
 
-        // Отладка: мы вошли в _hammam_entry
-        "mov dx, 0x3F8",
-        "mov al, '6'",
-        "out dx, al",
-
         // Установить свежий выровненный стек
         "lea rsp, [rip + KERNEL_STACK]",
         "add rsp, {stack_size}",
         "and rsp, -16",
 
-        // Отладка: стек установлен
-        "mov dx, 0x3F8",
-        "mov al, '7'",
-        "out dx, al",
-
         "mov rdi, rax",
         "mov rsi, rbx",
-
-        // Отладка: перед call
-        "mov dx, 0x3F8",
-        "mov al, '8'",
-        "out dx, al",
 
         "call _start_multiboot2",
 

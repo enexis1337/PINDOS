@@ -125,17 +125,10 @@ pub extern "C" fn _start() -> ! {
             // Flat data segments for rep stos and memory access under GRUB paging.
             "movw %ds, %ax",
             "movw %ax, %es",
-            "movw $0x3F8, %dx",
-            "movb $'4', %al",
-            "outb %al, %dx",
             // Mask PICs (disable all hardware IRQs) until IDT is ready
             "movb $0xff, %al",
             "outb %al, $0x21",
             "outb %al, $0xa1",
-            // Debug: write '1' to COM1 before building IDT
-            "movw $0x3F8, %dx",
-            "movb $'1', %al",
-            "outb %al, (%dx)",
             // Build a minimal 32-bit IDT in .data.boot (EARLY_IDT_ADDR) and load it (early)
             "leal early_exception32, %ebx",   // handler address
             "movl ${early_idt_addr}, %edi",  // IDT base (in .data.boot)
@@ -156,11 +149,6 @@ pub extern "C" fn _start() -> ! {
             "movw $2047, (%edi)",
             "movl ${early_idt_addr}, 4(%edi)",
             "lidt (%edi)",
-            // Debug: write '2' to COM1 after loading IDT
-            "movw $0x3F8, %dx",
-            "movb $'2', %al",
-            "outb %al, (%dx)",
-
             // Save Multiboot2 handoff into loaded .data.boot (absolute addresses).
             "movl $({handoff_magic}), %edi",
             "movl %eax, (%edi)",
@@ -233,34 +221,14 @@ pub extern "C" fn _start() -> ! {
             "orl $0x80000000, %eax",
             "mov %eax, %cr0",
 
-            // Debug: write 'a' to COM1 after paging enabled
-            "movw $0x3F8, %dx",
-            "movb $'a', %al",
-            "outb %al, (%dx)",
-
             // Setup GDT pointer base address
             "movl ${gdt_addr}, %eax",
             "movl ${gdt_ptr_addr}, %ebx",
             "movl %eax, 2(%ebx)",        // Set base (lower 32 bits)
             "movl $0, 6(%ebx)",          // Set base (upper 32 bits)
 
-            // Debug: write 'b' to COM1 before lgdt
-            "movw $0x3F8, %dx",
-            "movb $'b', %al",
-            "outb %al, (%dx)",
-
             // Load GDT for 64-bit mode  
             "lgdt (%ebx)",
-
-            // Debug: write 'c' to COM1 after lgdt
-            "movw $0x3F8, %dx",
-            "movb $'c', %al",
-            "outb %al, (%dx)",
-
-            // Debug: write 'd' right before lret
-            "movw $0x3F8, %dx",
-            "movb $'d', %al",
-            "outb %al, (%dx)",
 
             // Far jump to 64-bit code segment
             "pushl $0x08",               // Code segment selector  
@@ -268,11 +236,6 @@ pub extern "C" fn _start() -> ! {
             "pushl %eax",                // Offset
             "lret",                      // Pop CS:EIP and jump
 
-            // Debug: write 'e' if lret failed and we land here
-            "movw $0x3F8, %dx",
-            "movb $'e', %al",
-            "outb %al, (%dx)",
-            "hlt",
 
             "no_long_mode:",
             "hlt",
@@ -285,11 +248,6 @@ pub extern "C" fn _start() -> ! {
             "movl (%rax), %eax",
             "movabs ${handoff_info}, %rbx",
             "movl (%rbx), %ebx",
-
-            // Отладка: перед прыжком на _hammam_entry
-            "movw $0x3F8, %dx",
-            "movb $'5', %al",
-            "outb %al, %dx",
 
             // Передать управление _hammam_entry
             "jmp _hammam_entry",
