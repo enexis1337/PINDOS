@@ -131,10 +131,12 @@ impl InitramfsFs {
         let normalized = normalize_path(path);
 
         // Корневая директория
+        let parent_fs = self as *const InitramfsFs;
         if normalized == "/" {
             return Ok(Arc::new(InitramfsVnode {
                 fs: Arc::new(self.root.clone()),
                 path: String::from("/"),
+                parent_fs: parent_fs,
             }));
         }
 
@@ -143,6 +145,7 @@ impl InitramfsFs {
             return Ok(Arc::new(InitramfsVnode {
                 fs: Arc::new(entry.clone()),
                 path: String::from(&normalized),
+                parent_fs: parent_fs,
             }));
         }
 
@@ -165,7 +168,11 @@ impl Clone for InitEntry {
 struct InitramfsVnode {
     fs: Arc<InitEntry>,
     path: String,
+    parent_fs: *const InitramfsFs,
 }
+
+unsafe impl Send for InitramfsVnode {}
+unsafe impl Sync for InitramfsVnode {}
 
 impl Vnode for InitramfsVnode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, IoError> {
@@ -186,7 +193,6 @@ impl Vnode for InitramfsVnode {
     }
 
     fn write(&self, _offset: u64, _buf: &[u8]) -> Result<usize, IoError> {
-        // Read-only файловая система
         Err(IoError::PermissionDenied)
     }
 
@@ -202,21 +208,17 @@ impl Vnode for InitramfsVnode {
             return Err(IoError::NotADirectory);
         }
 
-        // Построить полный путь
-        let _full_path = if self.path == "/" {
+        let full_path = if self.path == "/" {
             format!("/{}", name)
         } else {
             format!("{}/{}", self.path, name)
         };
 
-        // Найти в children
         if !self.fs.children.contains(&String::from(name)) {
             return Err(IoError::NotFound);
         }
 
-        // Это должно быть реализовано через основную fs структуру
-        // Для простоты возвращаем ошибку (нужна рефакторизация)
-        Err(IoError::NotFound)
+        unsafe { (*self.parent_fs).lookup_path(&full_path) }
     }
 
     fn readdir(&self) -> Result<Vec<String>, IoError> {

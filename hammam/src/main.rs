@@ -30,7 +30,7 @@ pub mod security;
 use boot_info::{MemoryKind, MemoryRegion};
 use core::mem::size_of;
 use mm::physical::PHYSICAL_ALLOCATOR;
-use sched::{create_kernel_thread, exit_current, yield_now};
+use alloc::sync::Arc;
 
 const MAX_MEMORY_REGIONS: usize = 64;
 
@@ -105,20 +105,6 @@ struct Mb2BootInfo {
     reserved: u32,
 }
 
-extern "C" fn thread_a() -> ! {
-    kprintln!("[thread A] start");
-    yield_now();
-    kprintln!("[thread A] resumed, done");
-    exit_current();
-}
-
-extern "C" fn thread_b() -> ! {
-    kprintln!("[thread B] start");
-    yield_now();
-    kprintln!("[thread B] resumed, done");
-    exit_current();
-}
-
 /// Точка входа ядра из assembly (_hammam_entry).
 #[no_mangle]
 pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
@@ -130,6 +116,10 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
 
     arch::x86_64::gdt::init();
     kprintln!("[OK] GDT initialized");
+
+    // SAFETY: Called once during boot, no interrupts are enabled yet.
+    unsafe { interrupts::init_idt(); }
+    kprintln!("[OK] IDT initialized");
 
     security::enable_smep_smap();
     security::enable_nx();
@@ -156,19 +146,59 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     let v: Vec<u32> = vec![1, 2, 3];
     kprintln!("heap test: {:?}", v);
 
-    // Создаём 2 kernel threads (чисто кооперативное планирование)
-    let t1 = create_kernel_thread(thread_a);
-    let t2 = create_kernel_thread(thread_b);
+    // Mount initramfs
+    let cpio_data = userspace_blob::build_initramfs();
+    let initramfs = vfs::initramfs::InitramfsFs::parse(cpio_data)
+        .expect("initramfs parse failed");
+    let root_vnode = initramfs.lookup_path("/")
+        .expect("initramfs root lookup failed");
+    // Leak the Arc so raw pointers in Vnodes stay valid
+    let _ = Arc::into_raw(initramfs);
+    vfs::VFS.lock().mount("/", root_vnode);
+    kprintln!("[OK] Initramfs mounted");
 
+    // Load /hello ELF
+    let hello_vnode = vfs::VFS.lock().lookup("/hello")
+        .expect("/hello not found in VFS");
+    let stat = hello_vnode.stat().expect("stat failed");
+    let mut elf_data = alloc::vec![0u8; stat.size as usize];
+    hello_vnode.read(0, &mut elf_data).expect("read failed");
+    kprintln!("[OK] /hello loaded ({} bytes)", elf_data.len());
+
+    // Initialize SYSCALL/SYSRET
+    arch::x86_64::syscall::init();
+    kprintln!("[OK] SYSCALL/SYSRET initialized");
+
+    // Direct test: manually map and write at 0x400000
     {
-        let mut scheduler = sched::SCHEDULER.lock();
-        scheduler.add_task(t1);
-        scheduler.add_task(t2);
+        use crate::mm::{map_page, PageFlags, PHYSICAL_ALLOCATOR};
+        let mut alloc = PHYSICAL_ALLOCATOR.lock();
+        let frame = alloc.allocate(0).unwrap();
+        kprintln!("[TEST] Allocated frame at 0x{:x}", frame.start_address);
+        unsafe {
+            map_page(0x400000, frame, PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER_ACCESSIBLE, &mut alloc).unwrap();
+            // Write test pattern
+            core::ptr::write_volatile(0x400000 as *mut u32, 0xDEADBEEF);
+            let val = core::ptr::read_volatile(0x400000 as *const u32);
+            kprintln!("[TEST] wrote 0xDEADBEEF to 0x400000, read back: 0x{:x}", val);
+        }
+        // drop allocator lock so Process::from_elf can lock it
     }
-    kprintln!("[OK] Kernel threads created, starting scheduler...");
 
-    // Переключаемся в планировщик (только cooperative — таймер не включён)
-    sched::start_scheduler();
+    // Load ELF via Process
+    let process = process::Process::from_elf(1, &elf_data)
+        .expect("process from elf failed");
+    kprintln!("[OK] Process 1 created, entry=0x{:x}, user_stack=0x{:x}",
+        process.entry_point, process.user_stack_top);
+
+    // Jump to Ring 3 userspace (never returns)
+    kprintln!("[OK] Jumping to userspace...");
+    unsafe {
+        arch::x86_64::syscall::jump_to_userspace(
+            process.entry_point,
+            process.user_stack_top,
+        );
+    }
 
     kprintln!("Boot sequence complete. Halting.");
     loop {

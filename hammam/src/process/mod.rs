@@ -1,8 +1,9 @@
 use crate::drivers::serial::SpinMutex;
 use crate::cap::CapTable;
 use crate::loader::elf::ElfLoader;
-use crate::mm::{PHYSICAL_ALLOCATOR};
+use crate::mm::{PHYSICAL_ALLOCATOR, map_page, PageFlags};
 use crate::arch::gdt;
+use crate::arch::x86_64::syscall;
 
 pub struct Process {
     pub pid: u32,
@@ -31,11 +32,23 @@ impl Process {
             .map_err(|_| ProcessError::StackAllocationError)?;
         let kernel_stack_top = kernel_stack_frame.start_address + 0x1000;
         gdt::set_kernel_stack(kernel_stack_top);
+        syscall::set_kernel_stack(kernel_stack_top);
 
         let user_stack_frame = allocator
             .allocate(0)
             .map_err(|_| ProcessError::StackAllocationError)?;
-        let user_stack_top = user_stack_frame.start_address + 0x1000;
+        // Map user stack at a fixed high address to avoid conflicts
+        let user_stack_vaddr: u64 = 0x08000000;
+        unsafe {
+            map_page(
+                user_stack_vaddr,
+                user_stack_frame,
+                PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER_ACCESSIBLE,
+                &mut allocator,
+            )
+            .map_err(|_| ProcessError::StackAllocationError)?;
+        }
+        let user_stack_top = user_stack_vaddr + 0x1000;
 
         let cap_table = SpinMutex::new(CapTable::new());
 

@@ -246,10 +246,17 @@ pub unsafe fn map_page(
     // SAFETY: Ссылка на валидную PT таблицу.
     let pt = unsafe { get_table(pt_frame) };
     let pt_idx = pt_index(virt);
-    if pt.entries[pt_idx].flags().contains(PageFlags::PRESENT) {
-        return Err(MapError::AlreadyMapped);
-    }
+    // If already mapped (e.g. after huge-page split), overwrite.
     pt.entries[pt_idx].set_frame(phys, flags | PageFlags::PRESENT);
+
+    // Flush TLB entry so the CPU sees the new mapping (huge→4KiB split or remap)
+    unsafe { core::arch::asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags)); }
+
+    // Debug: verify the mapping
+    let debug_entry = pt.entries[pt_idx].0;
+    if virt == 0x400000 {
+        unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'M'); }
+    }
 
     Ok(())
 }

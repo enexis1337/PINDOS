@@ -1,6 +1,11 @@
 use crate::kprintln;
 use crate::mm::validate_user_slice;
 
+/// Saved user RSP during syscall entry (SYSCALL does NOT switch stacks).
+pub static mut SC_RSP_SAVE: u64 = 0;
+/// Kernel stack RSP used by syscall_entry.
+pub static mut SC_KERNEL_RSP: u64 = 0;
+
 /// Ошибки syscall операций
 #[derive(Debug, Clone, Copy)]
 pub enum SyscallError {
@@ -45,6 +50,11 @@ const EFER_SCE: u64 = 1 << 0;          // System Call Extensions
 const SFMASK_IF: u64 = 1 << 9;
 
 use crate::arch::gdt;
+
+/// Установить kernel stack для syscall_entry
+pub fn set_kernel_stack(rsp: u64) {
+    unsafe { SC_KERNEL_RSP = rsp; }
+}
 
 /// Инициализация SYSCALL/SYSRET механизма
 pub fn init() {
@@ -111,41 +121,40 @@ unsafe fn wrmsr(msr: u32, value: u64) {
 ///   RAX = номер syscall
 ///   RDI, RSI, RDX = аргументы
 ///   R8, R9 = аргументы 4,5 (стандарт System V AMD64 ABI)
+///
+/// ВАЖНО: SYSCALL не переключает стек! RSP всё ещё указывает на user-стек.
+/// Мы должны вручную сохранить user RSP и переключиться на kernel-стек.
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
-        // Сохранить возврат userspace состояния
-        "push rcx",                     // RIP возврата (будет восстановлен в sysretq)
-        "push r11",                     // RFLAGS возврата (будет восстановлен в sysretq)
-        
-        // Сохранить регистры пользователя которые нужно восстановить
+        // 1. Save user RSP (SYSCALL doesn't switch it), then switch to kernel stack
+        "mov [rip + {saved}], rsp",
+        "mov rsp, [rip + {krsp}]",
+        // 2. Push saved context onto kernel stack
+        "push rcx",                     // RIP возврата
+        "push r11",                     // RFLAGS возврата
         "push rdi",
         "push rsi",
         "push rdx",
         "push r8",
         "push r9",
-        
-        // RAX содержит номер syscall, RDI-RDX уже позиционированы корректно
-        // Вызвать Rust диспетчер: syscall_dispatch(rax, rdi, rsi, rdx, r8, r9)
-        // x86-64 SysV ABI: rdi, rsi, rdx, rcx, r8, r9
-        // RAX уже содержит номер syscall (перейдет в RDI)
-        "mov rdi, rax",                 // номер syscall -> RDI
-        // RSI, RDX, R8, R9 уже содержат аргументы
-        "call {0}",
-        
-        // Восстановить регистры пользователя
+        // 3. Dispatch
+        "mov rdi, rax",
+        "call {dispatch}",
+        // 4. Restore registers
         "pop r9",
         "pop r8",
         "pop rdx",
         "pop rsi",
         "pop rdi",
-        
-        // Восстановить RFLAGS и RIP, вернуться в userspace через sysretq
-        "pop r11",                      // RFLAGS
-        "pop rcx",                      // RIP
+        "pop r11",
+        "pop rcx",
+        // 5. Restore user RSP and return
+        "mov rsp, [rip + {saved}]",
         "sysretq",
-        
-        sym syscall_dispatch,
+        saved = sym SC_RSP_SAVE,
+        krsp = sym SC_KERNEL_RSP,
+        dispatch = sym syscall_dispatch,
     );
 }
 
@@ -153,6 +162,7 @@ unsafe extern "C" fn syscall_entry() {
 /// Сигнатура для x86-64 SysV ABI: syscall_dispatch(nr, arg0, arg1, arg2, arg3, arg4)
 #[no_mangle]
 pub extern "C" fn syscall_dispatch(nr: u64, a0: u64, a1: u64, a2: u64, _a3: u64, _a4: u64) -> i64 {
+    unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'!'); }
     match nr {
         1 => sys_write(a0, a1, a2),
         60 => sys_exit(a0 as i32),
@@ -187,6 +197,12 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
         }
     };
 
+    let prefix = b"[USERSPACE] ";
+    unsafe {
+        for &b in prefix {
+            crate::drivers::serial::SERIAL.get().write_byte(b);
+        }
+    }
     for &b in user_buffer {
         unsafe { crate::drivers::serial::SERIAL.get().write_byte(b); }
     }
@@ -197,6 +213,10 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
 /// Прыжок в userspace через SYSRET.
 /// Устанавливает RCX=RIP, R11=RFLAGS, RSP=user_stack и выполняет sysretq.
 pub unsafe fn jump_to_userspace(entry: u64, stack: u64) -> ! {
+    let bytes = unsafe { core::slice::from_raw_parts(entry as *const u8, 16) };
+    crate::kprintln!("[DEBUG] code at 0x{:x}: {:02x?}", entry, bytes);
+    // Write 'J' to COM1 just before sysretq
+    unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'J'); }
     unsafe {
         core::arch::asm!(
             "mov rcx, {entry}",

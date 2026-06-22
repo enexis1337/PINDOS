@@ -63,7 +63,7 @@ static mut BOOT_WORKSPACE: BootWorkspace = BootWorkspace {
 };
 
 // `.data.boot` is the first section in `.data` (see link.ld / readelf -S).
-const DATA_BOOT_VADDR: u32 = 0x109000;
+const DATA_BOOT_VADDR: u32 = 0x113000;
 const BOOT_PT_ADDR: u32 = DATA_BOOT_VADDR;
 const BOOT_PT_PDPT_OFF: u32 = 4096;
 const BOOT_PT_PD_OFF: u32 = 8192;
@@ -174,25 +174,25 @@ pub extern "C" fn _start() -> ! {
             "movl $3072, %ecx",
             "rep stosl",
 
-            // PML4[0] -> PDPT
+            // PML4[0] -> PDPT  (PRESENT | WRITABLE | USER_ACCESSIBLE = 0x7)
             "movl ${boot_pt}, %edi",
             "movl ${boot_pt}, %eax",
             "addl ${pdpt_off}, %eax",
-            "orl $3, %eax",
+            "orl $7, %eax",
             "movl %eax, (%edi)",
 
-            // PDPT[0] -> PD
+            // PDPT[0] -> PD (PRESENT | WRITABLE | USER_ACCESSIBLE = 0x7)
             "movl ${boot_pt}, %eax",
             "addl ${pdpt_off}, %eax",
             "movl ${boot_pt}, %ecx",
             "addl ${pd_off}, %ecx",
-            "orl $3, %ecx",
+            "orl $7, %ecx",
             "movl %ecx, (%eax)",
 
-            // PD: identity-map first 1 GiB with 2 MiB pages
+            // PD: identity-map first 1 GiB with 2 MiB pages (PRESENT | WRITABLE | HUGE_PAGE | USER_ACCESSIBLE = 0x87)
             "movl ${boot_pt}, %edi",
             "addl ${pd_off}, %edi",
-            "movl $0x83, %eax",
+            "movl $0x87, %eax",
             "movl $512, %ecx",
             "1:",
             "movl %eax, (%edi)",

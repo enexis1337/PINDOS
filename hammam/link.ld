@@ -21,7 +21,6 @@ SECTIONS {
     }
     
     .data : ALIGN(4096) {
-        /* Boot workspace must be in a loaded segment (GRUB maps PT_LOAD only). */
         KEEP(*(.data.boot))
         *(.data)
         *(.data.*)

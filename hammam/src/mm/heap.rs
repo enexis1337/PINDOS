@@ -54,6 +54,7 @@ impl LinkedHeapAllocator {
     unsafe fn alloc_raw(&mut self, size: usize, align: usize) -> Option<*mut u8> {
         let size = core::cmp::max(size, core::mem::size_of::<Hole>());
         let align = core::cmp::max(align, core::mem::align_of::<Hole>());
+        let size = (size + align - 1) & !(align - 1);
 
         let mut prev: *mut Hole = &mut self.head;
         
