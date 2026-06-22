@@ -5,6 +5,9 @@
 
 extern crate alloc;
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 pub mod boot;
 
 pub mod boot_info;
@@ -131,6 +134,12 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
         unsafe { PHYSICAL_ALLOCATOR.lock().init(&regions[..region_count]); }
         kprintln!("[OK] Buddy allocator initialized");
     }
+
+    unsafe { mm::HEAP_ALLOCATOR.init(); }
+    kprintln!("[OK] Heap allocator initialized");
+
+    let v: Vec<u32> = vec![1, 2, 3];
+    kprintln!("heap test: {:?}", v);
 
     kprintln!("Boot sequence complete. Halting.");
     loop {
