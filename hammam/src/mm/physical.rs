@@ -93,7 +93,10 @@ impl BuddyAllocator {
     /// # Safety
     /// Границы диапазона должны быть строго выровнены по размеру страницы (4 KiB).
     unsafe fn add_memory_region(&mut self, start_addr: u64, end_addr: u64) {
-        let mut current_addr = start_addr;
+        let mut current_addr = if start_addr == 0 { PAGE_SIZE as u64 } else { start_addr };
+        if current_addr >= end_addr {
+            return;
+        }
         while current_addr < end_addr {
             let size = end_addr - current_addr;
             let max_pages = size / PAGE_SIZE as u64;

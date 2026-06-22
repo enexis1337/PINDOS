@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-pub mod boot;  // Boot header and entry point
+pub mod boot;
 
 pub mod boot_info;
 pub mod drivers;
@@ -24,11 +24,86 @@ pub mod io;
 pub mod block;
 pub mod security;
 
+use boot_info::{MemoryKind, MemoryRegion};
+use core::mem::size_of;
+use mm::physical::PHYSICAL_ALLOCATOR;
+
+const MAX_MEMORY_REGIONS: usize = 64;
+
+#[repr(C)]
+struct Mb2Tag {
+    tag_type: u32,
+    tag_size: u32,
+}
+
+#[repr(C)]
+struct Mb2MmapTag {
+    tag_type: u32,
+    tag_size: u32,
+    entry_size: u32,
+    entry_version: u32,
+}
+
+#[repr(C)]
+struct Mb2MmapEntry {
+    base_addr: u64,
+    length: u64,
+    entry_type: u32,
+    reserved: u32,
+}
+
+fn parse_multiboot2_memory_map(mbi_ptr: u32, regions: &mut [MemoryRegion]) -> usize {
+    let boot_info = mbi_ptr as *const Mb2BootInfo;
+    let total_size = unsafe { (*boot_info).total_size };
+    let end = (mbi_ptr + total_size) as *const u8;
+    let mut tag_ptr = (mbi_ptr + 8) as *const u8;
+    let mut count = 0;
+
+    while (tag_ptr as u32 + 8) <= (end as u32) {
+        let tag = unsafe { &*(tag_ptr as *const Mb2Tag) };
+        if tag.tag_type == 0 {
+            break;
+        }
+        if tag.tag_type == 6 {
+            let mmap = unsafe { &*(tag_ptr as *const Mb2MmapTag) };
+            let entry_size = mmap.entry_size as usize;
+            let entries_byte_count = (mmap.tag_size as usize).saturating_sub(size_of::<Mb2MmapTag>());
+            let entries_start = unsafe { tag_ptr.add(size_of::<Mb2MmapTag>()) };
+            let mut offset: usize = 0;
+
+            while offset + entry_size <= entries_byte_count && count < regions.len() {
+                let entry = unsafe { &*((entries_start as usize + offset) as *const Mb2MmapEntry) };
+                let kind = match entry.entry_type {
+                    1 => MemoryKind::Usable,
+                    3 => MemoryKind::AcpiReclaimable,
+                    4 => MemoryKind::AcpiNvs,
+                    _ => MemoryKind::Reserved,
+                };
+                regions[count] = MemoryRegion {
+                    start: entry.base_addr,
+                    end: entry.base_addr + entry.length,
+                    kind,
+                };
+                count += 1;
+                offset += entry_size;
+            }
+        }
+        let aligned_size = ((tag.tag_size + 7) & !7) as usize;
+        tag_ptr = unsafe { tag_ptr.add(aligned_size) };
+    }
+
+    count
+}
+
+#[repr(C)]
+struct Mb2BootInfo {
+    total_size: u32,
+    reserved: u32,
+}
+
 /// Точка входа ядра из assembly (_hammam_entry).
-/// Вызывается после установки стека и переключения в 64-битный режим.
 #[no_mangle]
 pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
-    // Инициализация UART
     unsafe { drivers::serial::SERIAL.get().init(); }
 
     kprintln!("Hammam / PINDOS booting...");
@@ -42,6 +117,20 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     security::enable_nx();
     security::init_canary();
     kprintln!("[OK] Security features enabled (SMEP/SMAP/NX/canary)");
+
+    let mut regions = [MemoryRegion {
+        start: 0,
+        end: 0,
+        kind: MemoryKind::Reserved,
+    }; MAX_MEMORY_REGIONS];
+
+    let region_count = parse_multiboot2_memory_map(mbi_ptr, &mut regions);
+    kprintln!("[OK] Multiboot2 memory map: {} regions", region_count);
+
+    if region_count > 0 {
+        unsafe { PHYSICAL_ALLOCATOR.lock().init(&regions[..region_count]); }
+        kprintln!("[OK] Buddy allocator initialized");
+    }
 
     kprintln!("Boot sequence complete. Halting.");
     loop {
