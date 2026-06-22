@@ -1,3 +1,4 @@
+use crate::kprintln;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 /// KASLR — Kernel Address Space Layout Randomization
@@ -19,33 +20,54 @@ pub fn kaslr_offset() -> u64 {
     rand & 0x00FF_FFFF_FFF0_0000
 }
 
+fn check_cpuid_leaf07_ebx() -> u64 {
+    let ebx: u64;
+    unsafe {
+        core::arch::asm!(
+            "push rbx",
+            "mov eax, 7",
+            "xor ecx, ecx",
+            "cpuid",
+            "mov {0}, rbx",
+            "pop rbx",
+            out(reg) ebx,
+            out("eax") _,
+            out("ecx") _,
+            lateout("edx") _,
+            options(preserves_flags)
+        );
+    }
+    ebx
+}
+
 /// SMEP (Supervisor Mode Execution Protection) + SMAP (Supervisor Mode Access Prevention)
 /// Запретить ядру исполнять и читать userspace память.
-/// SMEP: запретить исполнение кода из Ring 3 когда в Ring 0
-/// SMAP: запретить доступ к памяти Ring 3 когда в Ring 0
 /// Вызывается из _start на каждом CPU после инициализации GDT.
 pub fn enable_smep_smap() {
-    // SAFETY: выполняется один раз при boot до запуска userspace
+    let ebx = check_cpuid_leaf07_ebx();
+    let has_smep = (ebx & (1 << 7)) != 0;
+    let has_smap = (ebx & (1 << 20)) != 0;
+
+    if !has_smep && !has_smap {
+        kprintln!("[WARN] CPU does not support SMEP or SMAP");
+        return;
+    }
+
     unsafe {
-        let mut cr4: u64;
-        // Читаем CR4
-        core::arch::asm!(
-            "mov {}, cr4",
-            out(reg) cr4,
-            options(nostack, preserves_flags)
-        );
+        let cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, preserves_flags));
 
-        // Устанавливаем биты:
-        // Бит 20 (U/S) = SMEP — Supervisor Mode Execution Protection
-        // Бит 21 (SMAP) = SMAP — Supervisor Mode Access Prevention
-        cr4 |= (1 << 20) | (1 << 21);
+        let mut new_cr4 = cr4;
+        if has_smep {
+            new_cr4 |= 1 << 20;
+        }
+        if has_smap {
+            new_cr4 |= 1 << 21;
+        }
 
-        // Пишем обратно в CR4
-        core::arch::asm!(
-            "mov cr4, {}",
-            in(reg) cr4,
-            options(nostack, preserves_flags)
-        );
+        if new_cr4 != cr4 {
+            core::arch::asm!("mov cr4, {}", in(reg) new_cr4, options(nostack, preserves_flags));
+        }
     }
 }
 
@@ -88,10 +110,37 @@ pub fn enable_nx() {
 /// Компилятор может вставить проверку этого значения перед возвратом.
 pub static STACK_CANARY: AtomicU64 = AtomicU64::new(0);
 
+fn cpuid_ecx_leaf01() -> u64 {
+    let ecx: u64;
+    unsafe {
+        core::arch::asm!(
+            "push rbx",
+            "mov eax, 1",
+            "xor ecx, ecx",
+            "cpuid",
+            "mov {0}, rcx",
+            "pop rbx",
+            out(reg) ecx,
+            out("eax") _,
+            lateout("edx") _,
+            options(preserves_flags)
+        );
+    }
+    ecx
+}
+
 /// Инициализировать stack canary случайным значением
 pub fn init_canary() {
+    let ecx = cpuid_ecx_leaf01();
+    let has_rdrand = (ecx & (1 << 30)) != 0;
+
+    if !has_rdrand {
+        kprintln!("[WARN] CPU does not support RDRAND, using fallback canary");
+        STACK_CANARY.store(0xDEAD_BEEF_CAFE_BABE, Ordering::Release);
+        return;
+    }
+
     let mut val: u64;
-    // SAFETY: RDRAND поддерживается на всех целевых CPU
     unsafe {
         core::arch::asm!(
             "rdrand {}",

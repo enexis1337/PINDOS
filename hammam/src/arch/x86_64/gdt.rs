@@ -79,10 +79,10 @@ impl SegmentDescriptor {
         let base_low = base & 0xFFFFFF;
         let base_high = (base >> 24) & 0xFF;
         
-        let low = 0x0089 |                          // Type=1001(TSS available), P=1
-                 ((limit as u64) & 0xFFFF) |       // Limit low 16 bits
-                 (base_low << 16) |                // Base low 24 bits
-                 ((base_high & 0xFF) << 56);       // Base high 8 bits
+        let low = (0x0089u64 << 40) |                // Type=1001(TSS available), P=1
+                 ((limit as u64) & 0xFFFF) |        // Limit low 16 bits
+                 (base_low << 16) |                 // Base low 24 bits
+                 ((base_high & 0xFF) << 56);        // Base high 8 bits
         
         let high = (base >> 32) & 0xFFFFFFFF;      // Base high 32 bits
         
@@ -92,12 +92,12 @@ impl SegmentDescriptor {
 
 /// GDT таблица
 pub struct Gdt {
-    table: [u64; 6],  // 6 дескрипторов: null, kernel code, kernel data, user code, user data, TSS low
+    table: [u64; 7],  // 7 дескрипторов: null, kernel code, kernel data, user code, user data, TSS low, TSS high
     tss: Tss,
 }
 
 static mut GDT: Gdt = Gdt {
-    table: [0; 6],
+    table: [0; 7],
     tss: Tss {
         reserved0: 0,
         rsp0: 0,
@@ -144,15 +144,16 @@ pub fn init() {
         let tss_limit = (mem::size_of::<Tss>() - 1) as u32;
         let tss_desc = SegmentDescriptor::tss(tss_ptr, tss_limit);
         GDT.table[5] = tss_desc[0];
+        GDT.table[6] = tss_desc[1];
         
         // Загружаем GDT
         let gdt_ptr = core::ptr::addr_of!(GDT.table) as u64;
-        let gdt_limit = (mem::size_of::<[u64; 6]>() - 1) as u16;
+        let gdt_limit = (mem::size_of::<[u64; 7]>() - 1) as u16;
         
         // GDTR формат: [limit(2 байта)][base(8 байт)]
         let gdtr: *mut u8 = core::ptr::addr_of_mut!(GDT_DESCRIPTOR[0]);
-        *(gdtr as *mut u16) = gdt_limit;
-        *(gdtr.add(2) as *mut u64) = gdt_ptr;
+        core::ptr::write_unaligned(gdtr as *mut u16, gdt_limit);
+        core::ptr::write_unaligned(gdtr.add(2) as *mut u64, gdt_ptr);
         
         // Загружаем GDT через lgdt
         core::arch::asm!(

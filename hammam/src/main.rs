@@ -35,6 +35,14 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     kprintln!("magic = {:#x}", magic);
     kprintln!("mbi   = {:#x}", mbi_ptr);
 
+    arch::x86_64::gdt::init();
+    kprintln!("[OK] GDT initialized");
+
+    security::enable_smep_smap();
+    security::enable_nx();
+    security::init_canary();
+    kprintln!("[OK] Security features enabled (SMEP/SMAP/NX/canary)");
+
     kprintln!("Boot sequence complete. Halting.");
     loop {
         unsafe { core::arch::asm!("hlt", options(nostack)); }
