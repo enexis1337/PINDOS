@@ -313,6 +313,48 @@ pub unsafe fn unmap_page(virt: u64) -> Result<PhysFrame, UnmapError> {
     Ok(frame)
 }
 
+/// Транслирует виртуальный адрес во флаги записи таблицы страниц.
+/// Возвращает флаги конечной записи (PT) или флаги huge-page (PD/PDPT).
+pub fn translate_flags(virt: u64) -> Option<PageFlags> {
+    let pml4_addr = active_pml4();
+    let pml4 = unsafe { get_table(pml4_addr) };
+
+    let pml4_idx = pml4_index(virt);
+    if !pml4.entries[pml4_idx].flags().contains(PageFlags::PRESENT) {
+        return None;
+    }
+    let pdpt_frame = pml4.entries[pml4_idx].frame()?;
+
+    let pdpt = unsafe { get_table(pdpt_frame) };
+    let pdpt_idx = pdpt_index(virt);
+    if !pdpt.entries[pdpt_idx].flags().contains(PageFlags::PRESENT) {
+        return None;
+    }
+    // 1 GiB huge page in PDPT
+    if pdpt.entries[pdpt_idx].flags().contains(PageFlags::HUGE_PAGE) {
+        return Some(pdpt.entries[pdpt_idx].flags());
+    }
+    let pd_frame = pdpt.entries[pdpt_idx].frame()?;
+
+    let pd = unsafe { get_table(pd_frame) };
+    let pd_idx = pd_index(virt);
+    if !pd.entries[pd_idx].flags().contains(PageFlags::PRESENT) {
+        return None;
+    }
+    // 2 MiB huge page in PD
+    if pd.entries[pd_idx].flags().contains(PageFlags::HUGE_PAGE) {
+        return Some(pd.entries[pd_idx].flags());
+    }
+    let pt_frame = pd.entries[pd_idx].frame()?;
+
+    let pt = unsafe { get_table(pt_frame) };
+    let pt_idx = pt_index(virt);
+    if !pt.entries[pt_idx].flags().contains(PageFlags::PRESENT) {
+        return None;
+    }
+    Some(pt.entries[pt_idx].flags())
+}
+
 /// Транслирует виртуальный адрес в физический адрес на основе активных таблиц страниц.
 /// Поддерживает стандартные страницы 4 KiB и большие страницы 2 MiB.
 pub fn translate(virt: u64) -> Option<u64> {

@@ -24,8 +24,21 @@ pub enum TaskState {
 }
 
 /// Внутренняя структура адресного пространства процесса.
-/// Пока заглушка, чтобы соответствовать полю `address_space`.
+/// Пока обёртка над глобальными translate/translate_flags.
+/// В будущем будет хранить собственный корень PML4.
 pub struct AddressSpace;
+
+impl AddressSpace {
+    /// Транслировать виртуальный адрес в физический (см. `mm::translate`).
+    pub fn translate(&self, vaddr: u64) -> Option<u64> {
+        crate::mm::translate(vaddr)
+    }
+
+    /// Транслировать виртуальный адрес во флаги PT-записи (см. `mm::translate_flags`).
+    pub fn translate_flags(&self, vaddr: u64) -> Option<crate::mm::PageFlags> {
+        crate::mm::translate_flags(vaddr)
+    }
+}
 
 /// Простая `Mutex` для управления разделяемым доступом в `no_std`.
 pub struct Mutex<T> {

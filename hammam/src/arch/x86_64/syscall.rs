@@ -1,5 +1,6 @@
 use crate::kprintln;
-use crate::mm::validate_user_slice;
+use crate::mm::userptr::validate_user_slice;
+use crate::sched::task::AddressSpace;
 
 /// Saved user RSP during syscall entry (SYSCALL does NOT switch stacks).
 pub static mut SC_RSP_SAVE: u64 = 0;
@@ -188,18 +189,18 @@ fn sys_exit(code: i32) -> i64 {
     }
 }
 
+/// Singleton for the current address space (single AS for now).
+static ACTIVE_ASPACE: AddressSpace = AddressSpace;
+
 /// write(fd, buf, count) — вывести данные на serial
 fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
     if fd != 1 {
         return -9;
     }
 
-    let user_buffer = match validate_user_slice(buf_ptr, len) {
-        Ok(buf) => buf,
-        Err(e) => {
-            let err: SyscallError = e.into();
-            return i64::from(err);
-        }
+    let slice = match validate_user_slice(&ACTIVE_ASPACE, buf_ptr, len) {
+        Ok(s) => s,
+        Err(_) => return -14, // -EFAULT
     };
 
     let prefix = b"[USERSPACE] ";
@@ -208,7 +209,7 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
             crate::drivers::serial::SERIAL.get().write_byte(b);
         }
     }
-    for &b in user_buffer {
+    for &b in slice {
         unsafe { crate::drivers::serial::SERIAL.get().write_byte(b); }
     }
 
