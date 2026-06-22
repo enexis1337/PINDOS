@@ -138,8 +138,13 @@ unsafe extern "C" fn syscall_entry() {
         "push rdx",
         "push r8",
         "push r9",
-        // 3. Dispatch
+        // 3. Reload user args from stack: stack[rsp+0..48] = r9 r8 rdx rsi rdi r11 rcx
         "mov rdi, rax",
+        "mov rsi, [rsp + 32]",          // a0 = user's RDI (1st arg)
+        "mov rdx, [rsp + 24]",          // a1 = user's RSI (2nd arg)
+        "mov rcx, [rsp + 16]",          // a2 = user's RDX (3rd arg)
+        "mov r8,  [rsp + 8]",           // a3 = user's R8  (4th arg)
+        "mov r9,  [rsp + 0]",           // a4 = user's R9  (5th arg)
         "call {dispatch}",
         // 4. Restore registers
         "pop r9",
@@ -213,8 +218,6 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
 /// Прыжок в userspace через SYSRET.
 /// Устанавливает RCX=RIP, R11=RFLAGS, RSP=user_stack и выполняет sysretq.
 pub unsafe fn jump_to_userspace(entry: u64, stack: u64) -> ! {
-    let bytes = unsafe { core::slice::from_raw_parts(entry as *const u8, 16) };
-    crate::kprintln!("[DEBUG] code at 0x{:x}: {:02x?}", entry, bytes);
     // Write 'J' to COM1 just before sysretq
     unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'J'); }
     unsafe {

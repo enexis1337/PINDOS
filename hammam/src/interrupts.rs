@@ -13,7 +13,7 @@ struct IDTEntry {
     reserved: u32,
 }
 
-#[repr(C, align(16))]
+#[repr(C, packed)]
 struct IDTR {
     limit: u16,
     base: u64,

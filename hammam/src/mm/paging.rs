@@ -253,7 +253,6 @@ pub unsafe fn map_page(
     unsafe { core::arch::asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags)); }
 
     // Debug: verify the mapping
-    let debug_entry = pt.entries[pt_idx].0;
     if virt == 0x400000 {
         unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'M'); }
     }
