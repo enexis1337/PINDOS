@@ -63,7 +63,7 @@ static mut BOOT_WORKSPACE: BootWorkspace = BootWorkspace {
 };
 
 // `.data.boot` is the first section in `.data` (see link.ld / readelf -S).
-const DATA_BOOT_VADDR: u32 = 0x104000;
+const DATA_BOOT_VADDR: u32 = 0x109000;
 const BOOT_PT_ADDR: u32 = DATA_BOOT_VADDR;
 const BOOT_PT_PDPT_OFF: u32 = 4096;
 const BOOT_PT_PD_OFF: u32 = 8192;

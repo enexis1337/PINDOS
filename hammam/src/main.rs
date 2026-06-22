@@ -30,6 +30,7 @@ pub mod security;
 use boot_info::{MemoryKind, MemoryRegion};
 use core::mem::size_of;
 use mm::physical::PHYSICAL_ALLOCATOR;
+use sched::{create_kernel_thread, exit_current, yield_now};
 
 const MAX_MEMORY_REGIONS: usize = 64;
 
@@ -104,6 +105,20 @@ struct Mb2BootInfo {
     reserved: u32,
 }
 
+extern "C" fn thread_a() -> ! {
+    kprintln!("[thread A] start");
+    yield_now();
+    kprintln!("[thread A] resumed, done");
+    exit_current();
+}
+
+extern "C" fn thread_b() -> ! {
+    kprintln!("[thread B] start");
+    yield_now();
+    kprintln!("[thread B] resumed, done");
+    exit_current();
+}
+
 /// Точка входа ядра из assembly (_hammam_entry).
 #[no_mangle]
 pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
@@ -140,6 +155,20 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
 
     let v: Vec<u32> = vec![1, 2, 3];
     kprintln!("heap test: {:?}", v);
+
+    // Создаём 2 kernel threads (чисто кооперативное планирование)
+    let t1 = create_kernel_thread(thread_a);
+    let t2 = create_kernel_thread(thread_b);
+
+    {
+        let mut scheduler = sched::SCHEDULER.lock();
+        scheduler.add_task(t1);
+        scheduler.add_task(t2);
+    }
+    kprintln!("[OK] Kernel threads created, starting scheduler...");
+
+    // Переключаемся в планировщик (только cooperative — таймер не включён)
+    sched::start_scheduler();
 
     kprintln!("Boot sequence complete. Halting.");
     loop {

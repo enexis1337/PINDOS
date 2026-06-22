@@ -69,3 +69,46 @@ pub unsafe fn init_idt() {
         );
     }
 }
+
+pub unsafe fn set_idt_entry(vector: u8, handler: u64) {
+    unsafe {
+        IDT[vector as usize] = IDTEntry {
+            offset_low: (handler & 0xFFFF) as u16,
+            selector: 0x08,
+            ist: 0,
+            flags: 0x8E,
+            offset_mid: ((handler >> 16) & 0xFFFF) as u16,
+            offset_high: ((handler >> 32) & 0xFFFFFFFF) as u32,
+            reserved: 0,
+        };
+    }
+}
+
+#[unsafe(naked)]
+pub unsafe extern "C" fn timer_interrupt_entry() {
+    core::arch::naked_asm!(
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rdi",
+        "push rsi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "call {}",
+        "call {}",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rsi",
+        "pop rdi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+        "iretq",
+        sym crate::sched::tick_now,
+        sym crate::arch::x86_64::apic::lapic_eoi,
+    );
+}

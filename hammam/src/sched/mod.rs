@@ -5,6 +5,7 @@ use alloc::sync::Arc;
 use crate::arch::x86_64::context::{switch_context, Context as ArchContext};
 use crate::drivers::serial::SpinMutex;
 use crate::sched::task::{Task, TaskState};
+use crate::kprintln;
 
 pub mod task;
 
@@ -32,10 +33,10 @@ impl Scheduler {
         1024 / priority
     }
 
-    fn insert_task_into_queue(&mut self, task: Arc<Task>) {
+fn insert_task_into_queue(&mut self, task: Arc<Task>) {
         let mut vruntime = self.min_vruntime;
         if let Some(current) = self.current.as_ref() {
-            vruntime = vruntime.min(current.vruntime);
+            vruntime = vruntime.max(current.vruntime.saturating_add(1));
         }
 
         let mut key = vruntime;
@@ -123,20 +124,73 @@ impl Scheduler {
 
 pub static SCHEDULER: SpinMutex<Scheduler> = SpinMutex::new(Scheduler::new());
 
+static mut MAIN_CONTEXT: ArchContext = ArchContext::new();
+
+pub fn create_kernel_thread(main: extern "C" fn() -> !) -> Arc<Task> {
+    use alloc::sync::Arc;
+    use crate::sched::task::{AddressSpace, Mutex};
+
+    let mut task = Arc::new(Task::new(task::TaskId(0), 1, Arc::new(Mutex::new(AddressSpace))));
+
+    let stack_top = task.kernel_stack.top;
+    let stack_ptr = unsafe { stack_top - core::mem::size_of::<u64>() } as *mut u64;
+    unsafe { *stack_ptr = main as u64 };
+    unsafe {
+        let task_ptr = Arc::as_ptr(&task) as *mut Task;
+        (*task_ptr).context.rsp = stack_ptr as u64;
+        (*task_ptr).state = TaskState::Ready;
+    }
+
+    task
+}
+
+pub fn exit_current() -> ! {
+    let return_pair = {
+        let mut scheduler = SCHEDULER.lock();
+        if let Some(current) = scheduler.current.as_ref() {
+            unsafe {
+                let current_task = Arc::as_ptr(current) as *mut Task;
+                (*current_task).state = TaskState::Dead;
+            }
+        }
+        scheduler.schedule()
+    };
+
+    if let Some((from, to)) = return_pair {
+        unsafe { switch_context(from, to) }
+    }
+
+    kprintln!("[sched] no more tasks, halting");
+    loop {
+        unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack, preserves_flags)); }
+    }
+}
+
+pub fn start_scheduler() {
+    let (from, to) = {
+        let scheduler = SCHEDULER.lock();
+        let to = &scheduler.current.as_ref().unwrap().context as *const ArchContext;
+        (&raw mut MAIN_CONTEXT as *mut ArchContext, to)
+    };
+    unsafe { switch_context(from, to) }
+}
+
 pub fn schedule_now() {
-    if let Some((from, to)) = {
+    let pair = {
         let mut scheduler = SCHEDULER.lock();
         scheduler.schedule()
-    } {
+    };
+    if let Some((from, to)) = pair {
         unsafe { switch_context(from, to) }
     }
 }
 
 pub fn tick_now() {
-    if let Some((from, to)) = {
+    let pair = {
         let mut scheduler = SCHEDULER.lock();
         scheduler.tick()
-    } {
+    };
+    if let Some((from, to)) = pair {
         unsafe { switch_context(from, to) }
     }
 }
@@ -152,9 +206,6 @@ mod tests {
     use super::*;
     use alloc::sync::Arc;
     use crate::kprintln;
-    use crate::sched::task::{AddressSpace, Mutex};
-
-    static mut MAIN_CONTEXT: ArchContext = ArchContext::default();
 
     extern "C" fn task_a() -> ! {
         kprintln!("[sched] task A");
@@ -177,53 +228,11 @@ mod tests {
         exit_current();
     }
 
-    fn create_task(entry: extern "C" fn() -> !) -> Arc<Task> {
-        let mut task = Arc::new(Task::new(TaskId(0), 1, Arc::new(Mutex::new(AddressSpace))));
-
-        let stack_top = task.kernel_stack.top;
-        let stack_ptr = unsafe { stack_top.sub(core::mem::size_of::<u64>()) } as *mut u64;
-        unsafe { *stack_ptr = entry as u64 };
-        unsafe {
-            let task_ptr = Arc::as_ptr(&task) as *mut Task;
-            (*task_ptr).context.rsp = stack_ptr as u64;
-            (*task_ptr).state = TaskState::Ready;
-        }
-
-        task
-    }
-
-    fn exit_current() -> ! {
-        let mut return_pair = None;
-        let mut current_task_ptr: Option<*mut Task> = None;
-
-        {
-            let mut scheduler = SCHEDULER.lock();
-            if let Some(current) = scheduler.current.as_ref() {
-                unsafe {
-                    let current_task = Arc::as_ptr(current) as *mut Task;
-                    (*current_task).state = TaskState::Dead;
-                    current_task_ptr = Some(current_task);
-                }
-            }
-            return_pair = scheduler.schedule();
-        }
-
-        if let Some((from, to)) = return_pair {
-            unsafe { switch_context(from, to) }
-        }
-
-        if let Some(current_task) = current_task_ptr {
-            unsafe { switch_context(&mut (*current_task).context as *mut ArchContext, &MAIN_CONTEXT as *const ArchContext) }
-        }
-
-        loop {}
-    }
-
     #[test]
     fn round_robin_kernel_threads() {
-        let t1 = create_task(task_a);
-        let t2 = create_task(task_b);
-        let t3 = create_task(task_c);
+        let t1 = create_kernel_thread(task_a);
+        let t2 = create_kernel_thread(task_b);
+        let t3 = create_kernel_thread(task_c);
 
         {
             let mut scheduler = SCHEDULER.lock();
@@ -232,8 +241,12 @@ mod tests {
             scheduler.add_task(t3);
         }
 
+        let to = {
+            let scheduler = SCHEDULER.lock();
+            &scheduler.current.as_ref().unwrap().context as *const ArchContext
+        };
         unsafe {
-            switch_context(&mut MAIN_CONTEXT as *mut ArchContext, &SCHEDULER.lock().current.as_ref().unwrap().context as *const ArchContext);
+            switch_context(&mut MAIN_CONTEXT as *mut ArchContext, to);
         }
     }
 }
