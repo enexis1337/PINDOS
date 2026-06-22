@@ -62,8 +62,8 @@ static mut BOOT_WORKSPACE: BootWorkspace = BootWorkspace {
     stack: [0; BOOT_STACK_BYTES],
 };
 
-// `.data.boot` is the first section in `.data` at 0x101000.
-const DATA_BOOT_VADDR: u32 = 0x101000;
+// `.data.boot` is the first section in `.data` (see link.ld / readelf -S).
+const DATA_BOOT_VADDR: u32 = 0x103000;
 const BOOT_PT_ADDR: u32 = DATA_BOOT_VADDR;
 const BOOT_PT_PDPT_OFF: u32 = 4096;
 const BOOT_PT_PD_OFF: u32 = 8192;
@@ -122,6 +122,10 @@ pub extern "C" fn _start() -> ! {
 
             "cli",
 
+            // Save Multiboot2 handoff before any code clobbers EAX/EBX.
+            "movl %eax, ({handoff_magic})",
+            "movl %ebx, ({handoff_info})",
+
             // Flat data segments for rep stos and memory access under GRUB paging.
             "movw %ds, %ax",
             "movw %ax, %es",
@@ -149,11 +153,6 @@ pub extern "C" fn _start() -> ! {
             "movw $2047, (%edi)",
             "movl ${early_idt_addr}, 4(%edi)",
             "lidt (%edi)",
-            // Save Multiboot2 handoff into loaded .data.boot (absolute addresses).
-            "movl $({handoff_magic}), %edi",
-            "movl %eax, (%edi)",
-            "movl $({handoff_info}), %edi",
-            "movl %ebx, (%edi)",
 
             // Boot stack inside the loaded image.
             "movl ${boot_stack_top}, %esp",
@@ -243,6 +242,13 @@ pub extern "C" fn _start() -> ! {
 
             ".code64",
             "start64:",
+            "movw $0x10, %ax",
+            "movw %ax, %ds",
+            "movw %ax, %es",
+            "movw %ax, %ss",
+            "xorw %ax, %ax",
+            "movw %ax, %fs",
+            "movw %ax, %gs",
             // Загрузить magic и mbi_ptr из handoff области
             "movabs ${handoff_magic}, %rax",
             "movl (%rax), %eax",
