@@ -83,6 +83,7 @@ mod virtio;
 use alloc::vec;
 use smoltcp::{
     iface::{Config, Interface, SocketSet},
+    phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
     time::Instant,
     wire::{EthernetAddress, IpCidr, Ipv4Address},
 };
@@ -109,8 +110,11 @@ fn main() {
     };
 
     // 2. Инициализировать RX и TX очереди
+    dbg_str("[main] init rx_queue\n");
     let rx_queue = unsafe { virtio::Virtqueue::init(pci_dev.bar0, 0) };
+    dbg_str("[main] init tx_queue\n");
     let tx_queue = unsafe { virtio::Virtqueue::init(pci_dev.bar0, 1) };
+    dbg_str("[main] queues done\n");
 
     // 3. Создать Device wrapper для smoltcp
     let mut device = device::VirtioNetDevice {
@@ -118,21 +122,42 @@ fn main() {
         tx_queue,
         rx_buf: [0u8; 1514],
     };
+    dbg_str("[main] device created\n");
 
+    // 4. Проверка: маленькая аллокация (убедимся что allocator жив)
+    dbg_str("[main] test alloc\n");
+    {
+        let v = alloc::vec::Vec::<u8>::with_capacity(64);
+        dbg_str("[main] vec created, len=");
+        let n = v.len() as u64;
+        for shift in (0..16).step_by(4).rev() {
+            let nibble = (n >> shift) & 0xf;
+            let c = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + nibble as u8 - 10 };
+            dbg_outb(c);
+        }
+        dbg_outb(b'\n');
+    }
 
     // 5. Настроить smoltcp интерфейс
+    dbg_str("[main] ethernetaddr\n");
     let mac = EthernetAddress([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    dbg_str("[main] config\n");
     let config = Config::new(mac.into());
+    dbg_str("[main] Interface::new\n");
     let mut iface = Interface::new(config, &mut device, Instant::ZERO);
+    dbg_str("[main] iface created\n");
 
     // 6. Настроить IP адрес
+    dbg_str("[main] update_ip_addrs\n");
     iface.update_ip_addrs(|addr_list| {
         addr_list
             .push(IpCidr::new(Ipv4Address::new(10, 0, 0, 2).into(), 24))
             .ok();
     });
 
+    dbg_str("[main] sockets\n");
     let mut sockets = SocketSet::new(vec![]);
+    dbg_str("[main] sockets ready\n");
 
     println!("[net-server] network interface ready:");
     println!("[net-server]   MAC:  52:54:00:12:34:56");
@@ -142,17 +167,33 @@ fn main() {
     println!("[net-server] entering main event loop");
 
     // 7. Event loop
+    dbg_str("[main] event loop start\n");
     let mut poll_count = 0u64;
     loop {
         let timestamp = Instant::from_millis(poll_count as i64);
         iface.poll(timestamp, &mut device, &mut sockets);
-
         poll_count += 1;
-
-        // Периодическое логирование
         if poll_count % 10_000_000 == 0 {
-            println!("[net-server] running (poll cycles: {})", poll_count);
+            dbg_str("[main] poll ");
+            let n = poll_count;
+            for shift in (0..16).step_by(4).rev() {
+                let nibble = (n >> shift) & 0xf;
+                let c = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + nibble as u8 - 10 };
+                dbg_outb(c);
+            }
+            dbg_outb(b'\n');
         }
+        if poll_count > 10_000_000_000 { break; }
+    }
+    loop {}
+}
+
+fn dbg_outb(val: u8) {
+    unsafe { core::arch::asm!("out dx, al", in("dx") 0x3f8u16, in("al") val, options(nostack)); }
+}
+fn dbg_str(s: &str) {
+    for &b in s.as_bytes() {
+        dbg_outb(b);
     }
 }
 
@@ -179,11 +220,13 @@ pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mu
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 60u64, // sys_exit
-            in("rdi") 1u64,  // код выхода 1 = ошибка
-        );
+        // write "PANIC\n" to COM1 via outb
+        let s = b"PANIC\n";
+        for &b in s {
+            core::arch::asm!("out dx, al", in("dx") 0x3f8u16, in("al") b, options(nostack));
+        }
+        // Then try sys_exit
+        core::arch::asm!("syscall", in("rax") 60u64, in("rdi") 1u64);
     }
     loop {}
 }

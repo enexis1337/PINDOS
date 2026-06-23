@@ -7,7 +7,7 @@ const QUEUE_SIZE: usize = 256;
 struct VirtqDesc {
     addr:  u64,
     len:   u32,
-    flags: u16,   // bit0 = NEXT, bit1 = WRITE (device writes here)
+    flags: u16,
     next:  u16,
 }
 
@@ -38,14 +38,24 @@ pub struct Virtqueue {
     queue_idx: u16,
 }
 
+unsafe fn dbg_outb(port: u16, val: u8) {
+    core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nostack));
+}
+unsafe fn dbg_str(s: &str) {
+    for &b in s.as_bytes() {
+        dbg_outb(0x3f8, b);
+    }
+}
+
 impl Virtqueue {
-    /// # Safety
-    /// io_base должен быть валидным BAR0 virtio-net устройства.
     pub unsafe fn init(io_base: u16, queue_idx: u16) -> Self {
+        dbg_str("[virtio] init start\n");
+
         let desc_bytes  = core::mem::size_of::<VirtqDesc>() * QUEUE_SIZE;
         let avail_bytes = core::mem::size_of::<VirtqAvail>();
         let used_bytes  = core::mem::size_of::<VirtqUsed>();
         let total = desc_bytes + avail_bytes + used_bytes;
+        dbg_str("[virtio] alloc_zeroed\n");
 
         let layout = Layout::from_size_align(total, 4096).expect("layout");
         let ptr = alloc_zeroed(layout);
@@ -57,15 +67,15 @@ impl Virtqueue {
 
         for i in 0..QUEUE_SIZE - 1 {
             (*desc.add(i)).next  = (i + 1) as u16;
-            (*desc.add(i)).flags = 1; // NEXT
+            (*desc.add(i)).flags = 1;
         }
 
-        // Сообщить устройству физический адрес очереди.
-        // ВАЖНО: на реальном Hammam ptr — виртуальный адрес userspace,
-        // устройству нужен физический. Пока используем identity-mapping
-        // допущение (TODO: получить физ. адрес через syscall mmap с флагом DMA).
-        outw(io_base + 14, queue_idx);          // QUEUE_SEL
-        outl(io_base + 8,  (ptr as u32) / 4096); // QUEUE_PFN
+        dbg_str("[virtio] QUEUE_SEL\n");
+        outw(io_base + 14, queue_idx);
+        dbg_str("[virtio] QUEUE_PFN\n");
+        outl(io_base + 8,  (ptr as u32) / 4096);
+
+        dbg_str("[virtio] init done\n");
 
         Self { desc, avail, used, free_head: 0, last_used: 0, io_base, queue_idx }
     }
@@ -84,7 +94,7 @@ impl Virtqueue {
         (*self.avail).idx = (*self.avail).idx.wrapping_add(1);
         fence(Ordering::Release);
 
-        outw(self.io_base + 16, self.queue_idx); // QUEUE_NOTIFY
+        outw(self.io_base + 16, self.queue_idx);
     }
 
     pub unsafe fn recv(&mut self, buf: &mut [u8]) -> Option<usize> {

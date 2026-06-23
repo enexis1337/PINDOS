@@ -117,6 +117,10 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     arch::x86_64::gdt::init();
     kprintln!("[OK] GDT initialized");
 
+    arch::x86_64::pic::remap();
+    arch::x86_64::pic::disable();
+    kprintln!("[OK] Legacy PIC remapped and disabled");
+
     // SAFETY: Called once during boot, no interrupts are enabled yet.
     unsafe { interrupts::init_idt(); }
     kprintln!("[OK] IDT initialized");

@@ -10,7 +10,7 @@ pub const NET_SERVER_ELF: &[u8] = include_bytes!(
 /// Build a CPIO newc archive containing /hello with the net-server ELF binary.
 /// Returns a leaked `&'static [u8]` suitable for `InitramfsFs::parse`.
 pub fn build_initramfs() -> &'static [u8] {
-    let mut cpio = Vec::new();
+    let mut cpio = Vec::with_capacity(NET_SERVER_ELF.len() + 512);
     append_cpio_entry(&mut cpio, b"/hello", NET_SERVER_ELF);
     append_cpio_entry(&mut cpio, b"TRAILER!!!", &[]);
     Box::leak(cpio.into_boxed_slice())
