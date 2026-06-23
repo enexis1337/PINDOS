@@ -24,8 +24,10 @@ smoltcp = { version = "0.11", default-features = false, features = [
 
 [profile.release]
 opt-level = 2
-lto = true
-strip = true
+lto = false
+strip = false
+panic = "abort"
 
 [profile.dev]
 opt-level = 1
+panic = "abort"

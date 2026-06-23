@@ -34,21 +34,26 @@ impl Process {
         gdt::set_kernel_stack(kernel_stack_top);
         syscall::set_kernel_stack(kernel_stack_top);
 
-        let user_stack_frame = allocator
-            .allocate(0)
-            .map_err(|_| ProcessError::StackAllocationError)?;
-        // Map user stack at a fixed high address to avoid conflicts
+        const USER_STACK_PAGES: u64 = 16; // 64 KiB
         let user_stack_vaddr: u64 = 0x08000000;
-        unsafe {
-            map_page(
-                user_stack_vaddr,
-                user_stack_frame,
-                PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER_ACCESSIBLE,
-                &mut allocator,
-            )
-            .map_err(|_| ProcessError::StackAllocationError)?;
+        let mut user_stack_bottom = user_stack_vaddr;
+        let user_stack_vaddr_end = user_stack_vaddr + USER_STACK_PAGES * 0x1000;
+        while user_stack_bottom < user_stack_vaddr_end {
+            let frame = allocator
+                .allocate(0)
+                .map_err(|_| ProcessError::StackAllocationError)?;
+            unsafe {
+                map_page(
+                    user_stack_bottom,
+                    frame,
+                    PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER_ACCESSIBLE,
+                    &mut allocator,
+                )
+                .map_err(|_| ProcessError::StackAllocationError)?;
+            }
+            user_stack_bottom += 0x1000;
         }
-        let user_stack_top = user_stack_vaddr + 0x1000;
+        let user_stack_top = user_stack_vaddr_end;
 
         let cap_table = SpinMutex::new(CapTable::new());
 

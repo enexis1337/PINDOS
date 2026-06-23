@@ -229,7 +229,7 @@ pub unsafe fn jump_to_userspace(entry: u64, stack: u64) -> ! {
             "xor rbp, rbp",
             "sysretq",
             entry = in(reg) entry,
-            rflags = in(reg) 0x202u64,
+            rflags = in(reg) 0x3202u64,  // IF + IOPL=3 (userspace I/O)
             stack = in(reg) stack,
             options(noreturn)
         )
