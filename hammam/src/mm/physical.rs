@@ -1,6 +1,11 @@
 use crate::boot_info::{MemoryKind, MemoryRegion};
 use crate::drivers::serial::SpinMutex;
 
+extern "C" {
+    static kernel_phys_start: u8;
+    static kernel_phys_end: u8;
+}
+
 /// Максимальный порядок (order) блоков в Buddy Allocator.
 /// Порядки от 0 до 10 включительно (2^10 * 4 KiB = 4 MiB).
 pub const MAX_ORDER: usize = 11;
@@ -93,36 +98,49 @@ impl BuddyAllocator {
     /// # Safety
     /// Границы диапазона должны быть строго выровнены по размеру страницы (4 KiB).
     unsafe fn add_memory_region(&mut self, start_addr: u64, end_addr: u64) {
-        let mut current_addr = if start_addr == 0 { PAGE_SIZE as u64 } else { start_addr };
-        if current_addr >= end_addr {
-            return;
-        }
-        while current_addr < end_addr {
-            let size = end_addr - current_addr;
-            let max_pages = size / PAGE_SIZE as u64;
-            if max_pages == 0 {
-                break;
-            }
+        // Skip the kernel's own loaded range (code + data + bss)
+        // SAFETY: kernel_phys_start/end are plain u8 symbols from the linker script.
+        let kstart = unsafe { &kernel_phys_start as *const u8 as u64 };
+        let kend = unsafe { &kernel_phys_end as *const u8 as u64 };
 
-            // Находим максимальный порядок блока, который помещается в остаток региона
-            // и выровнен по границе (2^order * PAGE_SIZE)
-            let mut order = (MAX_ORDER - 1) as u8;
-            while order > 0 {
-                let block_size = (1u64 << order) * PAGE_SIZE as u64;
-                if max_pages >= (1u64 << order) && current_addr.is_multiple_of(block_size) {
+        // Process up to two sub-ranges (before kernel, after kernel)
+        let sub_ranges = [
+            (start_addr, core::cmp::min(end_addr, kstart)),
+            (core::cmp::max(start_addr, kend), end_addr),
+        ];
+
+        for &(range_start, range_end) in &sub_ranges {
+            if range_start >= range_end {
+                continue;
+            }
+            let mut current_addr = if range_start == 0 { PAGE_SIZE as u64 } else { range_start };
+            while current_addr < range_end {
+                let size = range_end - current_addr;
+                let max_pages = size / PAGE_SIZE as u64;
+                if max_pages == 0 {
                     break;
                 }
-                order -= 1;
-            }
 
-            let block_size = (1u64 << order) * PAGE_SIZE as u64;
-            
-            // SAFETY: Мы добавляем чистый и свободный участок памяти.
-            unsafe {
-                self.deallocate_internal(PhysFrame::new(current_addr), order);
+                // Находим максимальный порядок блока, который помещается в остаток региона
+                // и выровнен по границе (2^order * PAGE_SIZE)
+                let mut order = (MAX_ORDER - 1) as u8;
+                while order > 0 {
+                    let block_size = (1u64 << order) * PAGE_SIZE as u64;
+                    if max_pages >= (1u64 << order) && current_addr.is_multiple_of(block_size) {
+                        break;
+                    }
+                    order -= 1;
+                }
+
+                let block_size = (1u64 << order) * PAGE_SIZE as u64;
+
+                // SAFETY: Мы добавляем чистый и свободный участок памяти.
+                unsafe {
+                    self.deallocate_internal(PhysFrame::new(current_addr), order);
+                }
+                self.total_frames += 1 << order;
+                current_addr += block_size;
             }
-            self.total_frames += 1 << order;
-            current_addr += block_size;
         }
     }
 

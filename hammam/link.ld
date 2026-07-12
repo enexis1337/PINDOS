@@ -5,6 +5,7 @@ ENTRY(_start)
 SECTIONS {
     /* Start at 1 MiB (standard for multiboot) */
     . = 0x00100000;
+    kernel_phys_start = .;
     
     /* Multiboot2 header must be in first 32KB and in loadable segment */
     .text : ALIGN(4096) {
@@ -33,6 +34,9 @@ SECTIONS {
         *(COMMON)
     }
     
+    . = ALIGN(4096);
+    kernel_phys_end = .;
+
     /DISCARD/ : {
         *(.note.GNU-stack)
         *(.note.pvh)

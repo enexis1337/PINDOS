@@ -34,7 +34,16 @@ impl<'a> ElfLoader<'a> {
     pub fn load(&mut self) -> Result<u64, ElfError> {
         let elf = ElfFile::new(self.data).map_err(|_| ElfError::InvalidMagic)?;
 
-        let entry = elf.header.pt2.entry_point();
+        // Detect PIE binaries (first LOAD VA < 0x1000) and relocate to USER_BASE
+        let first_load_vaddr = elf.program_iter()
+            .filter(|ph| ph.get_type() == Ok(Type::Load))
+            .map(|ph| ph.virtual_addr())
+            .min()
+            .unwrap_or(0);
+        const USER_BASE: u64 = 0x10000000;
+        let load_offset = if first_load_vaddr < 0x1000 { USER_BASE } else { 0 };
+
+        let entry = elf.header.pt2.entry_point() + load_offset;
 
         // Итерируем через программные сегменты (segments)
         for ph in elf.program_iter() {
@@ -43,7 +52,7 @@ impl<'a> ElfLoader<'a> {
                 continue;
             }
 
-            let vaddr = ph.virtual_addr();
+            let vaddr = ph.virtual_addr() + load_offset;
             let filesz = ph.file_size() as usize;
             let memsz = ph.mem_size() as usize;
             let offset = ph.offset() as usize;
