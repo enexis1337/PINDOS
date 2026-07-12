@@ -34,6 +34,8 @@ impl<'a> ElfLoader<'a> {
     pub fn load(&mut self) -> Result<u64, ElfError> {
         let elf = ElfFile::new(self.data).map_err(|_| ElfError::InvalidMagic)?;
 
+        let entry = elf.header.pt2.entry_point();
+
         // Итерируем через программные сегменты (segments)
         for ph in elf.program_iter() {
             // Нас интересуют только LOAD сегменты
@@ -103,7 +105,7 @@ impl<'a> ElfLoader<'a> {
             }
         }
 
-        // Возвращаем точку входа программы
-        Ok(elf.header.pt2.entry_point())
+        // Возвращаем смещённую точку входа
+        Ok(entry)
     }
 }
