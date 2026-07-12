@@ -219,20 +219,6 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
 /// Прыжок в userspace через SYSRET.
 /// Устанавливает RCX=RIP, R11=RFLAGS, RSP=user_stack и выполняет sysretq.
 pub unsafe fn jump_to_userspace(entry: u64, stack: u64) -> ! {
-    // Debug: print first 16 bytes at entry point
-    unsafe {
-        let ptr = entry as *const u8;
-        let serial = crate::drivers::serial::SERIAL.get();
-        serial.write_byte(b'[');
-        for i in 0..16 {
-            let b = *ptr.add(i);
-            serial.write_hex(b);
-            if i < 15 { serial.write_byte(b' '); }
-        }
-        serial.write_byte(b']');
-    }
-    // Write 'J' to COM1 just before sysretq
-    unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'J'); }
     unsafe {
         core::arch::asm!(
             "mov rcx, {entry}",
