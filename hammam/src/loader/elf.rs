@@ -114,7 +114,69 @@ impl<'a> ElfLoader<'a> {
             }
         }
 
+        // Apply PIE relocations (R_X86_64_RELATIVE) for PIE binaries
+        self.apply_relocations(load_offset)?;
+
         // Возвращаем смещённую точку входа
         Ok(entry)
+    }
+
+    /// Apply R_X86_64_RELATIVE relocations from .rela.dyn (pointed to by PT_DYNAMIC).
+    fn apply_relocations(&self, load_offset: u64) -> Result<(), ElfError> {
+        if load_offset == 0 || load_offset > 0x100000000 {
+            return Ok(());
+        }
+        let elf = ElfFile::new(self.data).map_err(|_| ElfError::InvalidMagic)?;
+
+        let mut rela_va = 0u64;
+        let mut rela_size = 0u64;
+        let mut rela_ent = 24u64;
+
+        for ph in elf.program_iter() {
+            if ph.get_type() != Ok(Type::Dynamic) {
+                continue;
+            }
+            let dyn_off = ph.offset() as usize;
+            let dyn_sz = ph.file_size() as usize;
+            let mut i = 0;
+            while i + 16 <= dyn_sz {
+                let d_tag = u64::from_ne_bytes(
+                    self.data[dyn_off + i..dyn_off + i + 8].try_into().unwrap()
+                );
+                let d_val = u64::from_ne_bytes(
+                    self.data[dyn_off + i + 8..dyn_off + i + 16].try_into().unwrap()
+                );
+                match d_tag {
+                    7 => rela_va = d_val,             // DT_RELA
+                    8 => rela_size = d_val,           // DT_RELASZ
+                    9 => rela_ent = d_val,            // DT_RELAENT
+                    0 => break,
+                    _ => {}
+                }
+                i += 16;
+            }
+            break;
+        }
+
+        if rela_va == 0 || rela_size == 0 {
+            return Ok(());
+        }
+
+        let delta = load_offset;
+        let count = rela_size / rela_ent;
+        for i in 0..count {
+            let entry_va = rela_va + delta + i * rela_ent;
+            let r_offset = unsafe { core::ptr::read_volatile(entry_va as *const u64) };
+            let r_info = unsafe { core::ptr::read_volatile((entry_va + 8) as *const u64) };
+            let r_addend = unsafe { core::ptr::read_volatile((entry_va + 16) as *const i64) };
+
+            let r_type = (r_info & 0xFFFFFFFF) as u32;
+            if r_type == 8 {
+                let target_va = r_offset + delta;
+                let value = (r_addend as u64).wrapping_add(delta);
+                unsafe { core::ptr::write_volatile(target_va as *mut u64, value); }
+            }
+        }
+        Ok(())
     }
 }

@@ -2,9 +2,9 @@ use alloc::vec::Vec;
 use alloc::boxed::Box;
 
 /// Compiled net-server userspace ELF binary (virtio-net driver + smoltcp stack).
-/// Built with: cargo build --release in userspace/net-server
+/// Built with: cargo build --release --target x86_64-unknown-none in userspace/net-server
 pub const NET_SERVER_ELF: &[u8] = include_bytes!(
-    "../../userspace/net-server/target/x86_64-unknown-linux-gnu/release/net-server"
+    "../../userspace/net-server/target/x86_64-unknown-none/release/net-server"
 );
 
 /// Build a CPIO newc archive containing /hello with the net-server ELF binary.

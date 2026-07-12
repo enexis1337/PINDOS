@@ -103,6 +103,13 @@ impl Serial {
         }
     }
 
+    /// Выводит байт в виде двух hex-символов (00–FF)
+    pub fn write_hex(&self, value: u8) {
+        let hex = b"0123456789ABCDEF";
+        self.write_byte(hex[(value >> 4) as usize]);
+        self.write_byte(hex[(value & 0x0F) as usize]);
+    }
+
     /// Вспомогательная функция для записи байта в порт (outb)
     #[inline]
     unsafe fn outb(&self, offset: u16, value: u8) {
