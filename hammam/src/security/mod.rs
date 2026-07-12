@@ -71,6 +71,27 @@ pub fn enable_smep_smap() {
     }
 }
 
+/// Enable SSE/SSE2 in CR4 and initialize MXCSR.
+/// Required for userspace programs compiled with SSE instructions.
+pub fn enable_sse() {
+    unsafe {
+        let cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, preserves_flags));
+        let new_cr4 = cr4 | (1 << 9) | (1 << 10); // OSFXSR | OSXMMEXCPT
+        if new_cr4 != cr4 {
+            core::arch::asm!("mov cr4, {}", in(reg) new_cr4, options(nostack, preserves_flags));
+        }
+        // Initialize MXCSR to default (all exceptions masked, round-to-nearest)
+        core::arch::asm!(
+            "ldmxcsr [{0}]",
+            in(reg) &0x1F80u32 as *const u32,
+            options(nostack, preserves_flags)
+        );
+        // Initialize x87 FPU
+        core::arch::asm!("fninit", options(nostack, preserves_flags));
+    }
+}
+
 /// NX (No-Execute) / XD (Execute Disable)
 /// Запретить исполнение кода в data-страницах.
 /// Включить бит NXE (No-Execute Enable) в MSR_EFER.

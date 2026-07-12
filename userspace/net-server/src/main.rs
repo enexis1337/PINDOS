@@ -138,43 +138,55 @@ fn main() {
         dbg_outb(b'\n');
     }
 
-    // 5. Настроить smoltcp интерфейс
-    dbg_str("[main] ethernetaddr\n");
+    // 5. Тест: минимальный loop для проверки стабильности userspace
+    dbg_str("[net-server] testing basic loop...\n");
+    let mut counter: u64 = 0;
+    loop {
+        counter += 1;
+        if counter % 1_000_000 == 0 {
+            dbg_str("[net-server] alive, counter=");
+            let n = counter;
+            for shift in (0..48).step_by(4).rev() {
+                let nibble = (n >> shift) & 0xf;
+                let c = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + nibble as u8 - 10 };
+                dbg_outb(c);
+            }
+            dbg_outb(b'\n');
+        }
+        if counter >= 5_000_000 {
+            break;
+        }
+    }
+    dbg_str("[net-server] loop complete, smoltcp next\n");
+
+    // Step 2: smoltcp шаг за шагом
+    dbg_str("[net-server] creating smoltcp config...\n");
     let mac = EthernetAddress([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-    dbg_str("[main] config\n");
     let config = Config::new(mac.into());
-    dbg_str("[main] Interface::new\n");
+    dbg_str("[net-server] config created OK\n");
+
+    dbg_str("[net-server] Interface::new...\n");
     let mut iface = Interface::new(config, &mut device, Instant::ZERO);
-    dbg_str("[main] iface created\n");
+    dbg_str("[net-server] Interface::new returned\n");
 
-    // 6. Настроить IP адрес
-    dbg_str("[main] update_ip_addrs\n");
+    dbg_str("[net-server] update_ip_addrs...\n");
     iface.update_ip_addrs(|addr_list| {
-        addr_list
-            .push(IpCidr::new(Ipv4Address::new(10, 0, 0, 2).into(), 24))
-            .ok();
+        addr_list.push(IpCidr::new(Ipv4Address::new(10, 0, 0, 2).into(), 24)).ok();
     });
+    dbg_str("[net-server] update_ip_addrs OK\n");
 
-    dbg_str("[main] sockets\n");
+    dbg_str("[net-server] SocketSet...\n");
     let mut sockets = SocketSet::new(vec![]);
-    dbg_str("[main] sockets ready\n");
+    dbg_str("[net-server] SocketSet OK\n");
 
-    println!("[net-server] network interface ready:");
-    println!("[net-server]   MAC:  52:54:00:12:34:56");
-    println!("[net-server]   IPv4: 10.0.0.2/24");
-    println!("[net-server]   Gateway: 10.0.0.1");
-    println!("[net-server]   DNS: 10.0.2.3");
-    println!("[net-server] entering main event loop");
-
-    // 7. Event loop
-    dbg_str("[main] event loop start\n");
+    dbg_str("[net-server] poll loop start\n");
     let mut poll_count = 0u64;
     loop {
         let timestamp = Instant::from_millis(poll_count as i64);
         iface.poll(timestamp, &mut device, &mut sockets);
         poll_count += 1;
         if poll_count % 10_000_000 == 0 {
-            dbg_str("[main] poll ");
+            dbg_str("[net-server] poll ");
             let n = poll_count;
             for shift in (0..16).step_by(4).rev() {
                 let nibble = (n >> shift) & 0xf;
@@ -183,9 +195,9 @@ fn main() {
             }
             dbg_outb(b'\n');
         }
-        if poll_count > 10_000_000_000 { break; }
+        if poll_count > 100_000_000 { break; }
     }
-    loop {}
+    dbg_str("[net-server] poll loop complete\n");
 }
 
 fn dbg_outb(val: u8) {

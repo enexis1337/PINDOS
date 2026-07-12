@@ -127,6 +127,7 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
 
     security::enable_smep_smap();
     security::enable_nx();
+    security::enable_sse();
     security::init_canary();
     kprintln!("[OK] Security features enabled (SMEP/SMAP/NX/canary)");
 
