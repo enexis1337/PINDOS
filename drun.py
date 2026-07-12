@@ -212,6 +212,37 @@ def copy_artifact(src: Path, dest_name: str):
     size = dest.stat().st_size / 1024
     print(f"  → drunned/{dest_name} ({size:.1f} KiB)")
 
+def check_boot_workspace_addr():
+    """Проверить что DATA_BOOT_VADDR в boot.rs совпадает с реальным адресом BOOT_WORKSPACE."""
+    import subprocess, re
+
+    kernel_elf = KERNEL_DEBUG
+    if not kernel_elf.exists():
+        return
+
+    nm_out = subprocess.check_output(["nm", str(kernel_elf)], text=True)
+    match = re.search(r'([0-9a-f]+)\s+\w\s+\S*BOOT_WORKSPACE\S*', nm_out)
+    if not match:
+        print("  [WARN] BOOT_WORKSPACE symbol not found in ELF")
+        return
+
+    real_addr = int(match.group(1), 16)
+    boot_rs = (ROOT / "hammam/src/boot.rs").read_text()
+    const_match = re.search(r'DATA_BOOT_VADDR:\s*u32\s*=\s*(0x[0-9a-fA-F]+)', boot_rs)
+    if not const_match:
+        print("  [WARN] DATA_BOOT_VADDR not found in boot.rs")
+        return
+
+    declared_addr = int(const_match.group(1), 16)
+    if real_addr != declared_addr:
+        print(f"\n  [FATAL] DATA_BOOT_VADDR MISMATCH!")
+        print(f"          boot.rs declares: {declared_addr:#x}")
+        print(f"          ELF real address: {real_addr:#x}")
+        print(f"          Fix: update DATA_BOOT_VADDR in boot.rs to {real_addr:#x}")
+        sys.exit(1)
+    else:
+        print(f"  [OK] DATA_BOOT_VADDR = {real_addr:#x} matches ELF")
+
 # ── Команды ───────────────────────────────────────────────────────────────────
 def cmd_check():
     """-c : cargo check всех компонентов."""
@@ -264,6 +295,7 @@ def cmd_build():
     
     print("  Сборка Hammam kernel...")
     run(["cargo", "build", "--target", TARGET], cwd=HAMMAM_DIR)
+    check_boot_workspace_addr()
     
     print("\n  Создание ISO...")
     sh("bash tools/make_iso.sh")
@@ -281,6 +313,7 @@ def cmd_test():
     # Сначала собрать
     print("  Сборка Hammam kernel...")
     run(["cargo", "build", "--target", TARGET], cwd=HAMMAM_DIR)
+    check_boot_workspace_addr()
     
     print("  Создание ISO...")
     sh("bash tools/make_iso.sh")
