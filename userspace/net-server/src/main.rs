@@ -83,7 +83,6 @@ mod virtio;
 use alloc::vec;
 use smoltcp::{
     iface::{Config, Interface, SocketSet},
-    phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
     time::Instant,
     wire::{EthernetAddress, IpCidr, Ipv4Address},
 };
@@ -138,66 +137,24 @@ fn main() {
         dbg_outb(b'\n');
     }
 
-    // 5. Тест: минимальный loop для проверки стабильности userspace
-    dbg_str("[net-server] testing basic loop...\n");
-    let mut counter: u64 = 0;
-    loop {
-        counter += 1;
-        if counter % 1_000_000 == 0 {
-            dbg_str("[net-server] alive, counter=");
-            let n = counter;
-            for shift in (0..48).step_by(4).rev() {
-                let nibble = (n >> shift) & 0xf;
-                let c = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + nibble as u8 - 10 };
-                dbg_outb(c);
-            }
-            dbg_outb(b'\n');
-        }
-        if counter >= 5_000_000 {
-            break;
-        }
-    }
-    dbg_str("[net-server] loop complete, smoltcp next\n");
-
-    // Step 2: smoltcp шаг за шагом
-    dbg_str("[net-server] creating smoltcp config...\n");
+    // 5. Настроить smoltcp интерфейс
+    println!("[net-server] configuring smoltcp...");
     let mac = EthernetAddress([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
     let config = Config::new(mac.into());
-    dbg_str("[net-server] config created OK\n");
-
-    dbg_str("[net-server] Interface::new...\n");
     let mut iface = Interface::new(config, &mut device, Instant::ZERO);
-    dbg_str("[net-server] Interface::new returned\n");
-
-    dbg_str("[net-server] update_ip_addrs...\n");
     iface.update_ip_addrs(|addr_list| {
         addr_list.push(IpCidr::new(Ipv4Address::new(10, 0, 0, 2).into(), 24)).ok();
     });
-    dbg_str("[net-server] update_ip_addrs OK\n");
-
-    dbg_str("[net-server] SocketSet...\n");
     let mut sockets = SocketSet::new(vec![]);
-    dbg_str("[net-server] SocketSet OK\n");
 
-    dbg_str("[net-server] poll loop start\n");
-    let mut poll_count = 0u64;
+    // 6. Event loop
+    println!("[net-server] entering main event loop");
+    let mut poll_count: u64 = 0;
     loop {
         let timestamp = Instant::from_millis(poll_count as i64);
         iface.poll(timestamp, &mut device, &mut sockets);
         poll_count += 1;
-        if poll_count % 10_000_000 == 0 {
-            dbg_str("[net-server] poll ");
-            let n = poll_count;
-            for shift in (0..16).step_by(4).rev() {
-                let nibble = (n >> shift) & 0xf;
-                let c = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + nibble as u8 - 10 };
-                dbg_outb(c);
-            }
-            dbg_outb(b'\n');
-        }
-        if poll_count > 100_000_000 { break; }
     }
-    dbg_str("[net-server] poll loop complete\n");
 }
 
 fn dbg_outb(val: u8) {
