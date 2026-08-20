@@ -15,19 +15,17 @@ pub extern "C" fn _start() -> ! {
 
     let mut manager = ServiceManager::new();
 
-    // Загрузить встроенные сервисы (пока хардкод, потом из /etc/pindos/system/)
     manager.register("net-server", "/usr/bin/net-server");
 
     println!("[dealduck] starting services...");
     manager.start_all();
 
     println!("[dealduck] all services started, entering monitor loop");
-    manager.run() // бесконечный цикл мониторинга
+    manager.run()
 }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // PID 1 никогда не должен падать — halt
     loop {
         unsafe { core::arch::asm!("hlt", options(nostack)) };
     }

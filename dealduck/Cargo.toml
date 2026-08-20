@@ -8,7 +8,6 @@ name = "dealduck"
 path = "src/main.rs"
 
 [dependencies]
-# Пока без внешних зависимостей — только наши syscalls
 
 [profile.dev]
 panic = "abort"

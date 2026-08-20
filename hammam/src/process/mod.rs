@@ -4,13 +4,26 @@ use crate::loader::elf::ElfLoader;
 use crate::mm::{PHYSICAL_ALLOCATOR, map_page, PageFlags};
 use crate::arch::gdt;
 use crate::arch::x86_64::syscall;
+use crate::sched::task::{Task, AddressSpace, Mutex};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicI32, AtomicBool, Ordering};
 
 pub struct Process {
-    pub pid: u32,
-    pub cap_table: SpinMutex<CapTable>,
-    pub kernel_stack_top: u64,
-    pub entry_point: u64,
+    pub pid:           u32,
+    pub address_space: Arc<Mutex<AddressSpace>>,
+    pub cap_table:     SpinMutex<CapTable>,
+    pub main_task:     Arc<Task>,
+    pub entry_point:   u64,
     pub user_stack_top: u64,
+    pub exit_code:     AtomicI32,
+    pub is_zombie:     AtomicBool,
+}
+
+impl Process {
+    pub fn is_zombie(&self) -> bool {
+        self.is_zombie.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +47,7 @@ impl Process {
         gdt::set_kernel_stack(kernel_stack_top);
         syscall::set_kernel_stack(kernel_stack_top);
 
-        const USER_STACK_PAGES: u64 = 16; // 64 KiB
+        const USER_STACK_PAGES: u64 = 16;
         let user_stack_vaddr: u64 = 0x08000000;
         let mut user_stack_bottom = user_stack_vaddr;
         let user_stack_vaddr_end = user_stack_vaddr + USER_STACK_PAGES * 0x1000;
@@ -57,12 +70,23 @@ impl Process {
 
         let cap_table = SpinMutex::new(CapTable::new());
 
+        let address_space = Arc::new(Mutex::new(AddressSpace));
+
+        let task = Arc::new(Task::new(
+            crate::sched::task::TaskId(pid as u64),
+            1,
+            Arc::clone(&address_space),
+        ));
+
         Ok(Process {
             pid,
+            address_space,
             cap_table,
-            kernel_stack_top,
+            main_task: task,
             entry_point,
             user_stack_top,
+            exit_code: AtomicI32::new(0),
+            is_zombie: AtomicBool::new(false),
         })
     }
 
@@ -71,6 +95,17 @@ impl Process {
     }
 
     pub fn kernel_stack_top(&self) -> u64 {
-        self.kernel_stack_top
+        self.main_task.kernel_stack.top as u64
     }
+}
+
+pub static PROCESS_TABLE: SpinMutex<BTreeMap<u32, Arc<Process>>> =
+    SpinMutex::new(BTreeMap::new());
+
+pub static CURRENT_PROCESS: SpinMutex<Option<Arc<Process>>> = SpinMutex::new(None);
+
+pub fn next_pid() -> u32 {
+    static NEXT_PID: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(2);
+    NEXT_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
