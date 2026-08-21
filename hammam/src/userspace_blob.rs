@@ -1,19 +1,26 @@
 use alloc::vec::Vec;
-use alloc::boxed::Box;
 
-/// Compiled net-server userspace ELF binary (virtio-net driver + smoltcp stack).
-/// Built with: cargo build --release --target x86_64-unknown-none in userspace/net-server
+/// Dealduck — PID 1, сервис-менеджер PINDOS
+pub const DEALDUCK_ELF: &[u8] = include_bytes!(
+    "../../dealduck/target/x86_64-unknown-none/release/dealduck"
+);
+
+/// Net-server — сетевой стек, запускается dealduck как сервис
 pub const NET_SERVER_ELF: &[u8] = include_bytes!(
     "../../userspace/net-server/target/x86_64-unknown-none/release/net-server"
 );
 
-/// Build a CPIO newc archive containing /hello with the net-server ELF binary.
-/// Returns a leaked `&'static [u8]` suitable for `InitramfsFs::parse`.
-pub fn build_initramfs() -> &'static [u8] {
-    let mut cpio = Vec::with_capacity(NET_SERVER_ELF.len() + 512);
-    append_cpio_entry(&mut cpio, b"/hello", NET_SERVER_ELF);
-    append_cpio_entry(&mut cpio, b"TRAILER!!!", &[]);
-    Box::leak(cpio.into_boxed_slice())
+/// systemd-стиль unit-файл для net-server
+pub const NET_SERVER_SERVICE: &[u8] = b"[Unit]\nDescription=PINDOS Network Stack\n\n[Service]\nType=simple\nExecStart=/usr/bin/net-server\nRestart=on-failure\n";
+
+/// Build a CPIO newc archive containing /init (dealduck) and /usr/bin/net-server
+pub fn build_initramfs() -> Vec<u8> {
+    let mut cpio = Vec::new();
+    append_cpio_entry(&mut cpio, b"/init", DEALDUCK_ELF);
+    append_cpio_entry(&mut cpio, b"/usr/bin/net-server", NET_SERVER_ELF);
+    append_cpio_entry(&mut cpio, b"/etc/pindos/system/net-server.service", NET_SERVER_SERVICE);
+    append_cpio_trailer(&mut cpio);
+    cpio
 }
 
 fn append_cpio_entry(cpio: &mut Vec<u8>, name: &[u8], data: &[u8]) {
@@ -38,6 +45,10 @@ fn append_cpio_entry(cpio: &mut Vec<u8>, name: &[u8], data: &[u8]) {
     // file data
     cpio.extend_from_slice(data);
     align4(cpio);
+}
+
+fn append_cpio_trailer(cpio: &mut Vec<u8>) {
+    append_cpio_entry(cpio, b"TRAILER!!!", &[]);
 }
 
 fn hex8(v: usize) -> [u8; 8] {

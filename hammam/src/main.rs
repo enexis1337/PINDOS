@@ -7,6 +7,8 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 
 pub mod boot;
 
@@ -30,7 +32,6 @@ pub mod security;
 use boot_info::{MemoryKind, MemoryRegion};
 use core::mem::size_of;
 use mm::physical::PHYSICAL_ALLOCATOR;
-use alloc::sync::Arc;
 
 const MAX_MEMORY_REGIONS: usize = 64;
 
@@ -153,7 +154,9 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
 
     // Mount initramfs
     let cpio_data = userspace_blob::build_initramfs();
-    let initramfs = vfs::initramfs::InitramfsFs::parse(cpio_data)
+    // Leak the Vec to get 'static lifetime for initramfs parser
+    let cpio_data_leaked: &'static [u8] = Box::leak(cpio_data.into_boxed_slice());
+    let initramfs = vfs::initramfs::InitramfsFs::parse(cpio_data_leaked)
         .expect("initramfs parse failed");
     let root_vnode = initramfs.lookup_path("/")
         .expect("initramfs root lookup failed");
@@ -162,48 +165,32 @@ pub extern "C" fn _start_multiboot2(magic: u32, mbi_ptr: u32) -> ! {
     vfs::VFS.lock().mount("/", root_vnode);
     kprintln!("[OK] Initramfs mounted");
 
-    // Load /hello ELF
-    let hello_vnode = vfs::VFS.lock().lookup("/hello")
-        .expect("/hello not found in VFS");
-    let stat = hello_vnode.stat().expect("stat failed");
+    // Load /init ELF (dealduck = PID 1)
+    let init_vnode = vfs::VFS.lock().lookup("/init")
+        .expect("initramfs must contain /init");
+    let stat = init_vnode.stat().expect("stat failed");
     let mut elf_data = alloc::vec![0u8; stat.size as usize];
-    hello_vnode.read(0, &mut elf_data).expect("read failed");
-    kprintln!("[OK] /hello loaded ({} bytes)", elf_data.len());
+    init_vnode.read(0, &mut elf_data).expect("read failed");
+    kprintln!("[OK] /init (dealduck) loaded ({} bytes)", elf_data.len());
 
     // Initialize SYSCALL/SYSRET
     arch::x86_64::syscall::init();
     kprintln!("[OK] SYSCALL/SYSRET initialized");
 
-    // Direct test: manually map and write at 0x400000
-    {
-        use crate::mm::{map_page, PageFlags, PHYSICAL_ALLOCATOR};
-        let mut alloc = PHYSICAL_ALLOCATOR.lock();
-        let frame = alloc.allocate(0).unwrap();
-        kprintln!("[TEST] Allocated frame at 0x{:x}", frame.start_address);
-        unsafe {
-            map_page(0x400000, frame, PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER_ACCESSIBLE, &mut alloc).unwrap();
-            // Write test pattern
-            core::ptr::write_volatile(0x400000 as *mut u32, 0xDEADBEEF);
-            let val = core::ptr::read_volatile(0x400000 as *const u32);
-            kprintln!("[TEST] wrote 0xDEADBEEF to 0x400000, read back: 0x{:x}", val);
-        }
-        // drop allocator lock so Process::from_elf can lock it
-    }
+    // Load ELF via Process as PID 1
+    let init_process = process::Process::from_elf(1, &elf_data)
+        .expect("failed to create init process");
 
-    // Load ELF via Process
-    let process = process::Process::from_elf(1, &elf_data)
-        .expect("process from elf failed");
-    kprintln!("[OK] Process 1 created, entry=0x{:x}, user_stack=0x{:x}",
-        process.entry_point, process.user_stack_top);
+    let init_process_arc = Arc::new(init_process);
+    process::PROCESS_TABLE.lock().insert(1, Arc::clone(&init_process_arc));
 
-    // Jump to Ring 3 userspace (never returns)
-    kprintln!("[OK] Jumping to userspace...");
-    unsafe {
-        arch::x86_64::syscall::jump_to_userspace(
-            process.entry_point,
-            process.user_stack_top,
-        );
-    }
+    kprintln!("[OK] PID 1 (dealduck) created, entry={:#x}", init_process_arc.entry_point);
+    kprintln!("[OK] Jumping to userspace (dealduck)...");
+
+    unsafe { arch::x86_64::syscall::jump_to_userspace(
+        init_process_arc.entry_point,
+        init_process_arc.user_stack_top,
+    ); }
 
     kprintln!("Boot sequence complete. Halting.");
     loop {
