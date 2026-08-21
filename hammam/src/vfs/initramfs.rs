@@ -93,17 +93,73 @@ impl InitramfsFs {
             pos = align4(data_end);
         }
 
-        // Создаем корневую директорию и вычисляем children
+        // Create intermediate directories for nested paths (e.g. /usr/bin/net-server -> /usr, /usr/bin)
+        Self::create_parent_dirs(&mut entries);
+
+        // Compute children for ALL directories
+        let mut dir_children: alloc::collections::BTreeMap<String, Vec<String>> = alloc::collections::BTreeMap::new();
+        for (path, entry) in entries.iter() {
+            if entry.kind == FileKind::Directory {
+                let children = Self::compute_children(&entries, path);
+                dir_children.insert(path.clone(), children);
+            }
+        }
+        // Update entries with computed children
+        for (path, children) in dir_children {
+            if let Some(entry) = entries.get_mut(&path) {
+                entry.children = children;
+            }
+        }
+
+        // Создаем корневую директорию
         let root = InitEntry {
             kind: FileKind::Directory,
             data: &[],
-            children: Self::compute_children(&entries, "/"),
+            children: entries.get("/").map(|e| e.children.clone()).unwrap_or_default(),
         };
 
         Ok(Arc::new(Self {
             root,
             all_entries: entries,
         }))
+    }
+
+    /// Create parent directory entries for nested paths
+    fn create_parent_dirs(
+        entries: &mut alloc::collections::BTreeMap<String, InitEntry>,
+    ) {
+        // Collect all paths that need parent directories
+        let paths: alloc::vec::Vec<String> = entries.keys().cloned().collect();
+
+        for path in paths {
+            if path == "/" || path == "TRAILER!!!" {
+                continue;
+            }
+            let mut current = String::new();
+            for component in path.split('/').skip(1) {
+                if component.is_empty() {
+                    continue;
+                }
+                if current.is_empty() {
+                    current.push('/');
+                    current.push_str(component);
+                } else {
+                    current.push('/');
+                    current.push_str(component);
+                }
+                // Only add if not already exists
+                if !entries.contains_key(&current) {
+                    entries.insert(
+                        current.clone(),
+                        InitEntry {
+                            kind: FileKind::Directory,
+                            data: &[],
+                            children: Vec::new(),
+                        },
+                    );
+                }
+            }
+        }
     }
 
     /// Вычислить список дочерних файлов для директории

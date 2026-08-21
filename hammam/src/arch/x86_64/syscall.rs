@@ -219,22 +219,33 @@ fn sys_exec(path_ptr: u64, path_len: u64) -> i64 {
 
     let vnode = match VFS.lock().lookup(path) {
         Ok(v) => v,
-        Err(_) => return -2,
+        Err(e) => {
+            kprintln!("[syscall] exec: lookup failed: {:?}", e);
+            return -2;
+        }
     };
 
     let stat = match vnode.stat() {
         Ok(s) => s,
-        Err(_) => return -5,
+        Err(e) => {
+            kprintln!("[syscall] exec: stat failed: {:?}", e);
+            return -5;
+        }
     };
 
+    kprintln!("[syscall] exec: file size={}", stat.size);
     let mut elf_data = vec![0u8; stat.size as usize];
-    if let Err(_) = vnode.read(0, &mut elf_data) {
+    if let Err(e) = vnode.read(0, &mut elf_data) {
+        kprintln!("[syscall] exec: read failed: {:?}", e);
         return -5;
     }
 
     let process = match Process::from_elf(next_pid(), &elf_data) {
         Ok(p) => p,
-        Err(_) => return -12,
+        Err(e) => {
+            kprintln!("[syscall] exec: from_elf failed: {:?}", e);
+            return -12;
+        }
     };
 
     let pid = process.pid;
