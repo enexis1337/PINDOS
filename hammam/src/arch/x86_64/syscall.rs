@@ -118,59 +118,49 @@ unsafe fn wrmsr(msr: u32, value: u64) {
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
-        "mov [rip + {saved}], rsp",
-        "mov rsp, [rip + {krsp}]",
-        "push rcx",
-        "push r11",
-        "push rdi",
-        "push rsi",
-        "push rdx",
-        "push r8",
-        "push r9",
-        "mov rdi, rax",
-        "mov rsi, [rsp + 32]",
-        "mov rdx, [rsp + 24]",
-        "mov rcx, [rsp + 16]",
-        "mov r8,  [rsp + 8]",
-        "mov r9,  [rsp + 0]",
+        // Вход: RAX=nr, RDI=a0, RSI=a1, RDX=a2, RCX=RIP, R11=RFLAGS
+        // Сохранить user RSP
+        "mov [{saved}], rsp",
+        "mov rsp, [{krsp}]",
+
+        // Stack must be 16-byte aligned before CALL
+        "push rcx",           // save user RIP
+        "push r11",           // save user RFLAGS
+
+        // Move syscall args to ABI calling convention for dispatch(nr, a0, a1, a2)
+        // nr in RAX -> RDI (1st arg)
+        // a0 in RDI -> RSI (2nd arg)
+        // a1 in RSI -> RDX (3rd arg)
+        // a2 in RDX -> RCX (4th arg)
+        "push rdi",           // save a0
+        "push rsi",           // save a1
+        "push rdx",           // save a2
+        "mov rdi, rax",       // nr -> RDI (1st arg)
+        "mov rsi, [rsp + 16]", // a0 -> RSI (2nd arg)
+        "mov rdx, [rsp + 8]",  // a1 -> RDX (3rd arg)
+        "mov rcx, [rsp + 0]",  // a2 -> RCX (4th arg)
+
         "call {dispatch}",
-        "pop r9",
-        "pop r8",
-        "pop rdx",
-        "pop rsi",
-        "pop rdi",
-        "pop r11",
-        "pop rcx",
-        "mov rsp, [rip + {saved}]",
-        // Debug: write 'R' to serial on sysret
-        "mov al, 'R'",
-        "mov dx, 0x3f8",
-        "out dx, al",
-        // Debug: write return value
-        "mov al, '0'",
-        "add al, 1",  // '1'
-        "out dx, al",
+
+        // RAX = return value
         "sysretq",
-        saved = sym SC_RSP_SAVE,
-        krsp = sym SC_KERNEL_RSP,
+
+        saved    = sym SC_RSP_SAVE,
+        krsp     = sym SC_KERNEL_RSP,
         dispatch = sym syscall_dispatch,
     );
 }
 
 /// Rust диспетчер syscall
 #[no_mangle]
-pub extern "C" fn syscall_dispatch(nr: u64, a0: u64, a1: u64, a2: u64, _a3: u64, _a4: u64) -> i64 {
-    unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'!'); }
+pub extern "C" fn syscall_dispatch(nr: u64, a0: u64, a1: u64, a2: u64) -> i64 {
     match nr {
         0 => sys_yield(),
         1 => sys_write(a0, a1, a2),
         2 => sys_exec(a0, a1),
         3 => sys_waitpid(a0, a1),
         60 => sys_exit(a0 as i32),
-        _ => {
-            kprintln!("[SYSCALL] unknown syscall: {}", nr);
-            -38
-        }
+        _ => -38,
     }
 }
 
@@ -199,6 +189,7 @@ static ACTIVE_ASPACE: AddressSpace = AddressSpace;
 
 /// write(fd, buf, count) — вывести данные на serial
 fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
+    kprintln!("[syscall] write: fd={} buf={:#x} len={}", fd, buf_ptr, len);
     if fd != 1 {
         return -9;
     }
@@ -208,6 +199,7 @@ fn sys_write(fd: u64, buf_ptr: u64, len: u64) -> i64 {
         Err(_) => return -14,
     };
 
+    kprintln!("[syscall] write: validated, len={}", slice.len());
     let prefix = b"[USERSPACE] ";
     unsafe {
         for &b in prefix {
