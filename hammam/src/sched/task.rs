@@ -120,6 +120,8 @@ pub struct Task {
     pub kernel_stack: KernelStack,
     pub address_space: Arc<Mutex<AddressSpace>>,
     pub vruntime: u64,
+    pub user_entry: u64,
+    pub user_stack: u64,
 }
 
 impl Task {
@@ -132,6 +134,8 @@ impl Task {
             kernel_stack: KernelStack::new(),
             address_space,
             vruntime: 0,
+            user_entry: 0,
+            user_stack: 0,
         }
     }
 }

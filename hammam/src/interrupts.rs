@@ -70,12 +70,12 @@ pub unsafe fn init_idt() {
     }
 }
 
-pub unsafe fn set_idt_entry(vector: u8, handler: u64) {
+pub unsafe fn set_idt_entry(vector: u8, handler: u64, ist: u8) {
     unsafe {
         IDT[vector as usize] = IDTEntry {
             offset_low: (handler & 0xFFFF) as u16,
             selector: 0x08,
-            ist: 0,
+            ist,
             flags: 0xEE,
             offset_mid: ((handler >> 16) & 0xFFFF) as u16,
             offset_high: ((handler >> 32) & 0xFFFFFFFF) as u32,
@@ -87,6 +87,7 @@ pub unsafe fn set_idt_entry(vector: u8, handler: u64) {
 #[unsafe(naked)]
 pub unsafe extern "C" fn timer_interrupt_entry() {
     core::arch::naked_asm!(
+        // Simple handler: save minimal registers, call tick, EOI, iretq
         "push rax",
         "push rcx",
         "push rdx",
@@ -108,7 +109,7 @@ pub unsafe extern "C" fn timer_interrupt_entry() {
         "pop rcx",
         "pop rax",
         "iretq",
-        sym crate::sched::tick_now,
+        sym crate::sched::tick_now_debug,
         sym crate::arch::x86_64::apic::lapic_eoi,
     );
 }

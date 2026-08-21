@@ -2,12 +2,29 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
-use crate::arch::x86_64::context::{switch_context, Context as ArchContext};
+use core::sync::atomic::{AtomicPtr, Ordering};
+pub use crate::arch::x86_64::context::{switch_context, Context as ArchContext};
 use crate::drivers::serial::SpinMutex;
 use crate::sched::task::{Task, TaskState};
 use crate::kprintln;
 
 pub mod task;
+
+/// Current running task (set by scheduler during context switch)
+static CURRENT_TASK: AtomicPtr<Task> = AtomicPtr::new(core::ptr::null_mut());
+
+pub fn set_current_task(task: *mut Task) {
+    CURRENT_TASK.store(task, Ordering::Release);
+}
+
+pub fn get_current_task() -> Option<&'static mut Task> {
+    let ptr = CURRENT_TASK.load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &mut *ptr })
+    }
+}
 
 const QUANTUM_TICKS: u8 = 10;
 
@@ -93,6 +110,8 @@ fn insert_task_into_queue(&mut self, task: Arc<Task>) {
             let next_ptr = Arc::as_ptr(&next) as *const Task as *mut Task;
             (*current_ptr).state = TaskState::Ready;
             (*next_ptr).state = TaskState::Running;
+            // Update CURRENT_TASK for trampoline
+            crate::sched::set_current_task(next_ptr);
             Some((
                 &mut (*current_ptr).context as *mut ArchContext,
                 &(*next_ptr).context as *const ArchContext,
@@ -170,6 +189,9 @@ pub fn start_scheduler() {
     let (from, to) = {
         let scheduler = SCHEDULER.lock();
         let to = &scheduler.current.as_ref().unwrap().context as *const ArchContext;
+        // Set CURRENT_TASK for trampoline
+        let current_ptr = Arc::as_ptr(scheduler.current.as_ref().unwrap()) as *mut Task;
+        crate::sched::set_current_task(current_ptr);
         (&raw mut MAIN_CONTEXT as *mut ArchContext, to)
     };
     unsafe { switch_context(from, to) }
@@ -178,21 +200,46 @@ pub fn start_scheduler() {
 pub fn schedule_now() {
     let pair = {
         let mut scheduler = SCHEDULER.lock();
+        kprintln!("[sched] schedule_now: current={:?}, run_queue_len={}", 
+            scheduler.current.as_ref().map(|t| t.id.0), scheduler.run_queue.len());
         scheduler.schedule()
     };
     if let Some((from, to)) = pair {
+        kprintln!("[sched] switching context");
         unsafe { switch_context(from, to) }
+    } else {
+        kprintln!("[sched] no switch needed");
     }
 }
 
 pub fn tick_now() {
     let pair = {
         let mut scheduler = SCHEDULER.lock();
-        scheduler.tick()
+        if let Some(current) = scheduler.current.as_ref() {
+            unsafe {
+                let current_ptr = Arc::as_ptr(current) as *mut Task;
+                let increment = 1_000_000 / Scheduler::weight(current.priority);
+                (*current_ptr).vruntime = (*current_ptr).vruntime.saturating_add(increment);
+            }
+        }
+        scheduler.current_ticks = scheduler.current_ticks.saturating_add(1);
+        if scheduler.current_ticks >= QUANTUM_TICKS {
+            scheduler.current_ticks = 0;
+            scheduler.schedule()
+        } else {
+            None
+        }
     };
     if let Some((from, to)) = pair {
+        kprintln!("[tick] context switch");
         unsafe { switch_context(from, to) }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn tick_now_debug() {
+    unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'.'); }
+    tick_now();
 }
 
 pub fn yield_now() {

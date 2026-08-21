@@ -140,6 +140,14 @@ unsafe extern "C" fn syscall_entry() {
         "pop r11",
         "pop rcx",
         "mov rsp, [rip + {saved}]",
+        // Debug: write 'R' to serial on sysret
+        "mov al, 'R'",
+        "mov dx, 0x3f8",
+        "out dx, al",
+        // Debug: write return value
+        "mov al, '0'",
+        "add al, 1",  // '1'
+        "out dx, al",
         "sysretq",
         saved = sym SC_RSP_SAVE,
         krsp = sym SC_KERNEL_RSP,
@@ -152,6 +160,7 @@ unsafe extern "C" fn syscall_entry() {
 pub extern "C" fn syscall_dispatch(nr: u64, a0: u64, a1: u64, a2: u64, _a3: u64, _a4: u64) -> i64 {
     unsafe { crate::drivers::serial::SERIAL.get().write_byte(b'!'); }
     match nr {
+        0 => sys_yield(),
         1 => sys_write(a0, a1, a2),
         2 => sys_exec(a0, a1),
         3 => sys_waitpid(a0, a1),
@@ -161,6 +170,12 @@ pub extern "C" fn syscall_dispatch(nr: u64, a0: u64, a1: u64, a2: u64, _a3: u64,
             -38
         }
     }
+}
+
+fn sys_yield() -> i64 {
+    kprintln!("[syscall] yield called");
+    crate::sched::yield_now();
+    0
 }
 
 /// exit(code) — завершить процесс
@@ -249,12 +264,31 @@ fn sys_exec(path_ptr: u64, path_len: u64) -> i64 {
     };
 
     let pid = process.pid;
+    let entry = process.entry_point;
+    let stack = process.user_stack_top;
+
+    // Initialize child task context for first schedule
+    // Set up kernel stack to jump to trampoline on first context switch
+    unsafe {
+        let task_ptr = Arc::as_ptr(&process.main_task) as *mut crate::sched::task::Task;
+        let task = &mut *task_ptr;
+        // Set up stack with trampoline as return address
+        let stack_top = task.kernel_stack.top;
+        let stack_ptr = (stack_top - core::mem::size_of::<u64>()) as *mut u64;
+        *stack_ptr = crate::arch::x86_64::syscall::return_to_userspace_trampoline as u64;
+        task.context.rsp = stack_ptr as u64;
+        // Store user entry/stack for trampoline
+        task.user_entry = entry;
+        task.user_stack = stack;
+    }
+
     let process_arc = Arc::new(process);
 
     crate::sched::SCHEDULER.lock().add_task(process_arc.main_task.clone());
     PROCESS_TABLE.lock().insert(pid, Arc::clone(&process_arc));
 
-    kprintln!("[syscall] exec: spawned pid={}", pid);
+    kprintln!("[syscall] exec: spawned pid={}, entry={:#x}", pid, entry);
+    kprintln!("[syscall] exec: scheduler run_queue len after add: {}", crate::sched::SCHEDULER.lock().run_queue.len());
     pid as i64
 }
 
@@ -296,6 +330,24 @@ pub unsafe fn jump_to_userspace(entry: u64, stack: u64) -> ! {
             options(noreturn)
         )
     }
+}
+
+/// Trampoline for scheduler to re-enter userspace via SYSRET.
+/// Called when scheduler switches to a process that was started via SYSRET.
+/// Gets process entry point and user stack from current task.
+#[no_mangle]
+pub extern "C" fn return_to_userspace_trampoline() -> ! {
+    kprintln!("[trampoline] re-entering userspace");
+    let (entry, stack) = {
+        if let Some(task) = crate::sched::get_current_task() {
+            (task.user_entry, task.user_stack)
+        } else {
+            kprintln!("[trampoline] ERROR: no current task!");
+            loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
+        }
+    };
+    kprintln!("[trampoline] entry={:#x} stack={:#x}", entry, stack);
+    unsafe { jump_to_userspace(entry, stack); }
 }
 
 use core::sync::atomic::Ordering;

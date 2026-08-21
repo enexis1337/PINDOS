@@ -68,7 +68,13 @@ impl ServiceManager {
                 }
             }
 
-            unsafe { core::arch::asm!("hlt", options(nostack)) };
+            // Cooperative yield via syscall (syscall 0 = yield)
+            unsafe {
+                core::arch::asm!(
+                    "syscall",
+                    in("rax") 0u64,
+                );
+            }
         }
     }
 

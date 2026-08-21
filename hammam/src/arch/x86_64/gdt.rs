@@ -1,5 +1,11 @@
 use core::mem;
 
+// Per-CPU interrupt stack (IST1)
+#[repr(align(4096))]
+struct InterruptStack([u8; 8192]);
+
+static mut INTERRUPT_STACK: InterruptStack = InterruptStack([0; 8192]);
+
 // Селекторы сегментов с RPL (Requested Privilege Level)
 pub const KERNEL_CODE: u16 = 0x08;
 pub const KERNEL_DATA: u16 = 0x10;
@@ -104,7 +110,7 @@ static mut GDT: Gdt = Gdt {
         rsp1: 0,
         rsp2: 0,
         reserved1: 0,
-        ist1: 0,
+        ist1: 0,  // Will be set to INTERRUPT_STACK top
         ist2: 0,
         ist3: 0,
         ist4: 0,
@@ -140,6 +146,11 @@ pub fn init() {
         
         // 0x28 - TSS (системный дескриптор, 16 байт)
         GDT.tss.iomap_base = mem::size_of::<Tss>() as u16;
+        
+        // Set IST1 to dedicated interrupt stack
+        let int_stack_top = unsafe { &raw const INTERRUPT_STACK as *const _ as u64 + 8192 };
+        GDT.tss.ist1 = int_stack_top;
+        
         let tss_ptr = core::ptr::addr_of!(GDT.tss) as u64;
         let tss_limit = (mem::size_of::<Tss>() - 1) as u32;
         let tss_desc = SegmentDescriptor::tss(tss_ptr, tss_limit);
@@ -193,7 +204,9 @@ pub fn init() {
     }
 }
 
-/// Установка kernel stack для Ring 3 syscalls
+/// Установка kernel stack для Ring 3 syscalls (RSP0 in TSS)
+/// Note: CPU caches RSP0 on ltr, so this only works if called before first ltr
+/// For per-process stacks, use IST instead
 pub fn set_kernel_stack(rsp0: u64) {
     unsafe {
         GDT.tss.rsp0 = rsp0;

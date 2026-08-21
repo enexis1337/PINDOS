@@ -64,9 +64,10 @@ pub fn init_local_apic() {
         LOCAL_APIC_BASE = apic_virt;
     }
 
-    register_irq_handler(TIMER_VECTOR, timer_irq_handler);
+    unsafe { crate::interrupts::set_idt_entry(TIMER_VECTOR, crate::interrupts::timer_interrupt_entry as *const () as u64, 1); }
     lapic_write(APIC_REG_SVR, 0x100 | SPURIOUS_VECTOR);
     calibrate_apic_timer();
+    // Timer is now enabled (not masked) - will fire at calibrated interval
 }
 
 fn calibrate_apic_timer() {
@@ -102,6 +103,10 @@ pub fn lapic_eoi() {
     lapic_write(APIC_REG_EOI, 0);
 }
 
+pub fn init_timer_only() {
+    init_local_apic();
+}
+
 pub fn local_apic_id() -> u8 {
     (lapic_read(APIC_REG_ID) >> 24) as u8
 }
@@ -133,6 +138,7 @@ pub fn handle_irq(vector: u8) {
 fn timer_irq_handler() {
     lapic_eoi();
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::sched::tick_now();
 }
 
 fn pit_wait_millis(milliseconds: u16) {

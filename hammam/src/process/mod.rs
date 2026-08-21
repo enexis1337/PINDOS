@@ -4,7 +4,7 @@ use crate::loader::elf::ElfLoader;
 use crate::mm::{PHYSICAL_ALLOCATOR, map_page, PageFlags};
 use crate::arch::gdt;
 use crate::arch::x86_64::syscall;
-use crate::sched::task::{Task, AddressSpace, Mutex};
+use crate::sched::task::{Task, AddressSpace, Mutex, TaskState};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicI32, AtomicBool, Ordering};
@@ -72,11 +72,21 @@ impl Process {
 
         let address_space = Arc::new(Mutex::new(AddressSpace));
 
-        let task = Arc::new(Task::new(
+        let mut task = Arc::new(Task::new(
             crate::sched::task::TaskId(pid as u64),
             1,
             Arc::clone(&address_space),
         ));
+
+        // Initialize task context for scheduler: when switched to, return to userspace via SYSRET
+        unsafe {
+            let task_ptr = Arc::as_ptr(&task) as *mut Task;
+            let stack_top = (*task_ptr).kernel_stack.top;
+            let stack_ptr = (stack_top - core::mem::size_of::<u64>()) as *mut u64;
+            *stack_ptr = crate::arch::x86_64::syscall::return_to_userspace_trampoline as u64;
+            (*task_ptr).context.rsp = stack_ptr as u64;
+            (*task_ptr).state = TaskState::Ready;
+        }
 
         Ok(Process {
             pid,
